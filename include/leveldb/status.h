@@ -86,7 +86,7 @@ class LEVELDB_EXPORT Status {
   };
 
   Code code() const {
-    return (state_ == nullptr) ? kOk : static_cast<Code>(state_[4]);
+    return (state_ == nullptr)? kOk : static_cast<Code>(state_[4]);
   }
 
   Status(Code code, const Slice& msg, const Slice& msg2);
@@ -101,19 +101,24 @@ class LEVELDB_EXPORT Status {
 };
 
 inline Status::Status(const Status& rhs) {
-  state_ = (rhs.state_ == nullptr) ? nullptr : CopyState(rhs.state_);
+  state_ = (rhs.state_ == nullptr)? nullptr : CopyState(rhs.state_);
 }
 inline Status& Status::operator=(const Status& rhs) {
   // The following condition catches both aliasing (when this == &rhs),
   // and the common case where both rhs and *this are ok.
-  if (state_ != rhs.state_) {
+  if (state_!= rhs.state_) {
+    // Delete the current state if we're not ok.
     delete[] state_;
-    state_ = (rhs.state_ == nullptr) ? nullptr : CopyState(rhs.state_);
+    // Assign the new state pointer.
+    state_ = (rhs.state_ == nullptr)? nullptr : CopyState(rhs.state_);
   }
   return *this;
 }
+
 inline Status& Status::operator=(Status&& rhs) noexcept {
+  // 交换state_和rhs.state_
   std::swap(state_, rhs.state_);
+  // 返回当前对象
   return *this;
 }
 

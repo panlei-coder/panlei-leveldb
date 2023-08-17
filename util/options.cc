@@ -9,6 +9,7 @@
 
 namespace leveldb {
 
+// 被用来表中key比较，默认是字典序
 Options::Options() : comparator(BytewiseComparator()), env(Env::Default()) {}
 
 }  // namespace leveldb

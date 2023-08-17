@@ -1,3 +1,5 @@
+set(CMAKE_BUILD_TYPE "Debug")
+#set(CMAKE_CXX_FLAGS "-O3")
 # Copyright 2017 The LevelDB Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file. See the AUTHORS file for names of contributors.
@@ -5,6 +7,11 @@
 cmake_minimum_required(VERSION 3.9)
 # Keep the version below in sync with the one in db.h
 project(leveldb VERSION 1.23.0 LANGUAGES C CXX)
+
+# 运行Demo
+# find_package(Threads REQUIRED) #在系统中查找pthread（Threads）软件包，REQUIRED表示如果找不到就立马停止构建
+add_executable(Demo Demo.cc)  
+target_link_libraries(Demo PRIVATE leveldb Threads::Threads)
 
 # C standard can be overridden when this is used as a sub-project.
 if(NOT CMAKE_C_STANDARD)
@@ -108,7 +115,7 @@ include_directories(
   "${PROJECT_BINARY_DIR}/include"
   "."
 )
-
+# set(BUILD_SHARED_LIBS OFF)
 if(BUILD_SHARED_LIBS)
   # Only export LEVELDB_EXPORT symbols from the shared library.
   add_compile_options(-fvisibility=hidden)

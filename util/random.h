@@ -12,6 +12,7 @@ namespace leveldb {
 // A very simple random number generator.  Not especially good at
 // generating truly random bits, but good enough for our needs in this
 // package.
+// 一个非常简单的随机数生成器。不是特别擅长生成真正的随机比特，但足以满足我们在这个包中的需求。
 class Random {
  private:
   uint32_t seed_;
@@ -50,6 +51,7 @@ class Random {
 
   // Randomly returns true ~"1/n" of the time, and false otherwise.
   // REQUIRES: n > 0
+  // 随机返回true ~"1/n"的时间，否则返回false。
   bool OneIn(int n) { return (Next() % n) == 0; }
 
   // Skewed: pick "base" uniformly from range [0,max_log] and then
