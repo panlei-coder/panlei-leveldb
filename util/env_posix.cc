@@ -40,16 +40,24 @@ namespace leveldb {
 
 namespace {
 
+/*
+使用全局作用域“::”来访问系统调用函数
+*/
+
 // Set by EnvPosixTestHelper::SetReadOnlyMMapLimit() and MaxOpenFiles().
+// 设置由EnvPosixTestHelper:: SetReadOnlyMMapLimit()和MaxOpenFiles()。
 int g_open_read_only_file_limit = -1;
 
 // Up to 1000 mmap regions for 64-bit binaries; none for 32-bit.
+// 64位二进制文件最多1000个mmap区域;32位无。
 constexpr const int kDefaultMmapLimit = (sizeof(void*) >= 8) ? 1000 : 0;
 
 // Can be set using EnvPosixTestHelper::SetReadOnlyMMapLimit().
+// 可以使用EnvPosixTestHelper:: SetReadOnlyMMapLimit()设置。
 int g_mmap_limit = kDefaultMmapLimit;
 
 // Common flags defined for all posix open operations
+// 为所有posix打开操作定义的公共标志
 #if defined(HAVE_O_CLOEXEC)
 constexpr const int kOpenBaseFlags = O_CLOEXEC;
 #else
@@ -58,6 +66,7 @@ constexpr const int kOpenBaseFlags = 0;
 
 constexpr const size_t kWritableFileBufferSize = 65536;
 
+// 返回错误
 Status PosixError(const std::string& context, int error_number) {
   if (error_number == ENOENT) {
     return Status::NotFound(context, std::strerror(error_number));
@@ -70,16 +79,20 @@ Status PosixError(const std::string& context, int error_number) {
 // Currently used to limit read-only file descriptors and mmap file usage
 // so that we do not run out of file descriptors or virtual memory, or run into
 // kernel performance problems for very large databases.
+// Helper类限制资源使用以避免资源耗尽。目前用于限制只读文件描述符和mmap文件的使用，
+// 这样我们就不会耗尽文件描述符或虚拟内存，或者在非常大的数据库中遇到内核性能问题。
 class Limiter {
  public:
   // Limit maximum number of resources to |max_acquires|.
+  // 限制资源的最大数量为|max_acquires|
+  // 使用了条件编译
   Limiter(int max_acquires)
-      :
-#if !defined(NDEBUG)
+      : // 初始化列表
+#if !defined(NDEBUG) // 使用了条件编译
         max_acquires_(max_acquires),
 #endif  // !defined(NDEBUG)
         acquires_allowed_(max_acquires) {
-    assert(max_acquires >= 0);
+    assert(max_acquires >= 0); // 
   }
 
   Limiter(const Limiter&) = delete;
@@ -87,18 +100,21 @@ class Limiter {
 
   // If another resource is available, acquire it and return true.
   // Else return false.
+  // 如果其他资源可用，则获取它并返回true。否则返回false。
   bool Acquire() {
     int old_acquires_allowed =
-        acquires_allowed_.fetch_sub(1, std::memory_order_relaxed);
+        acquires_allowed_.fetch_sub(1, std::memory_order_relaxed); // 原子操作减一
 
     if (old_acquires_allowed > 0) return true;
 
     int pre_increment_acquires_allowed =
-        acquires_allowed_.fetch_add(1, std::memory_order_relaxed);
+        acquires_allowed_.fetch_add(1, std::memory_order_relaxed); // 原子操作加一
 
     // Silence compiler warnings about unused arguments when NDEBUG is defined.
+    // 当定义NDEBUG时，默认编译器对未使用参数的警告。
     (void)pre_increment_acquires_allowed;
     // If the check below fails, Release() was called more times than acquire.
+    // 如果下面的检查失败，Release()被调用的次数多于acquire。
     assert(pre_increment_acquires_allowed < max_acquires_);
 
     return false;
@@ -106,6 +122,7 @@ class Limiter {
 
   // Release a resource acquired by a previous call to Acquire() that returned
   // true.
+  // 释放之前调用Acquire()获得的资源，该方法返回true。
   void Release() {
     int old_acquires_allowed =
         acquires_allowed_.fetch_add(1, std::memory_order_relaxed);
@@ -119,13 +136,15 @@ class Limiter {
  private:
 #if !defined(NDEBUG)
   // Catches an excessive number of Release() calls.
-  const int max_acquires_;
+  // 捕获过多的Release()调用。
+  const int max_acquires_;  // 最大允许获取的资源数
 #endif  // !defined(NDEBUG)
 
   // The number of available resources.
   //
   // This is a counter and is not tied to the invariants of any other class, so
   // it can be operated on safely using std::memory_order_relaxed.
+  // 可用资源的数量。这是一个计数器，不绑定到任何其他类的不变量，因此可以使用std::memory顺序放松安全地对其进行操作。
   std::atomic<int> acquires_allowed_;
 };
 
@@ -133,16 +152,18 @@ class Limiter {
 //
 // Instances of this class are thread-friendly but not thread-safe, as required
 // by the SequentialFile API.
+// 使用read()在文件中实现顺序读访问。这个类的实例是线程友好的，但不是线程安全的，这是SequentialFile API所要求的。
 class PosixSequentialFile final : public SequentialFile {
  public:
   PosixSequentialFile(std::string filename, int fd)
       : fd_(fd), filename_(std::move(filename)) {}
   ~PosixSequentialFile() override { close(fd_); }
 
+// 从fd_中读取指定长度的内容到缓存区scratch中（顺序读取，非线程安全）
   Status Read(size_t n, Slice* result, char* scratch) override {
     Status status;
     while (true) {
-      ::ssize_t read_size = ::read(fd_, scratch, n);
+      ::ssize_t read_size = ::read(fd_, scratch, n); // 从fd_中读取指定长度的内容到缓存区scratch中（系统调用函数）
       if (read_size < 0) {  // Read error.
         if (errno == EINTR) {
           continue;  // Retry
@@ -156,16 +177,17 @@ class PosixSequentialFile final : public SequentialFile {
     return status;
   }
 
+// 
   Status Skip(uint64_t n) override {
-    if (::lseek(fd_, n, SEEK_CUR) == static_cast<off_t>(-1)) {
+    if (::lseek(fd_, n, SEEK_CUR) == static_cast<off_t>(-1)) { // 系统调用函数，用于在文件描述符指定的文件中进行定位操作，n为偏移量，SEEK_CUR为起始位置
       return PosixError(filename_, errno);
     }
     return Status::OK();
   }
 
  private:
-  const int fd_;
-  const std::string filename_;
+  const int fd_;  // 文件描述符
+  const std::string filename_; // 文件名称
 };
 
 // Implements random read access in a file using pread().
@@ -173,6 +195,8 @@ class PosixSequentialFile final : public SequentialFile {
 // Instances of this class are thread-safe, as required by the RandomAccessFile
 // API. Instances are immutable and Read() only calls thread-safe library
 // functions.
+// 使用pread()在文件中实现随机读访问。这个类的实例是线程安全的，
+// 这是RandomAccessFile API所要求的。实例是不可变的，并且Read()只调用线程安全的库函数。
 class PosixRandomAccessFile final : public RandomAccessFile {
  public:
   // The new instance takes ownership of |fd|. |fd_limiter| must outlive this
@@ -196,10 +220,11 @@ class PosixRandomAccessFile final : public RandomAccessFile {
     }
   }
 
+// 
   Status Read(uint64_t offset, size_t n, Slice* result,
               char* scratch) const override {
     int fd = fd_;
-    if (!has_permanent_fd_) {
+    if (!has_permanent_fd_) { // 判断文件是否打开，如果没有则以只读的方式打开
       fd = ::open(filename_.c_str(), O_RDONLY | kOpenBaseFlags);
       if (fd < 0) {
         return PosixError(filename_, errno);
@@ -209,7 +234,7 @@ class PosixRandomAccessFile final : public RandomAccessFile {
     assert(fd != -1);
 
     Status status;
-    ssize_t read_size = ::pread(fd, scratch, n, static_cast<off_t>(offset));
+    ssize_t read_size = ::pread(fd, scratch, n, static_cast<off_t>(offset)); // pread函数在多线程环境下是安全的，但是可能需要额外的同步措施来保护文件描述符的并发访问
     *result = Slice(scratch, (read_size < 0) ? 0 : read_size);
     if (read_size < 0) {
       // An error: return a non-ok status.
@@ -224,17 +249,34 @@ class PosixRandomAccessFile final : public RandomAccessFile {
   }
 
  private:
+ //如果为false，每次读取都打开文件。
   const bool has_permanent_fd_;  // If false, the file is opened on every read.
+  // 如果has_permanent_fd_为true，则为文件描述符
   const int fd_;                 // -1 if has_permanent_fd_ is false.
+  // 限制只读文件描述符的使用
   Limiter* const fd_limiter_;
+  // 文件名
   const std::string filename_;
 };
 
+/*
+使用mmap共享内存来提高性能
+1. mmap()函数可以把一个文件或者Posix共享内存对象映射到调用进程的地址空间。映射分为两种。
+  a. 文件映射：文件映射将一个文件的一部分直接映射到调用进程的虚拟内存中。
+  一旦一个文件被映射之后就可以通过在相应的内存区域中操作字节来访问文件内容了。
+  映射的分页会在需要的时候从文件中（自动）加载。这种映射也被称为基于文件的映射或内存映射文件。
+  b.匿名映射：一个匿名映射没有对应的文件。相反，这种映射的分页会被初始化为 0。
+2.mmap()系统调用在调用进程的虚拟地址空间中创建一个新映射。
+3.munmap()系统调用执行与mmap()相反的操作，即从调用进程的虚拟地址空间中删除映射。
+4.msync:用于刷盘策略。内核的虚拟内存算法保持内存映射文件与内存映射区的同步，因此内核会在未来某个时刻同步，如果我们需要实时，则需要msync同步刷。
+*/
 // Implements random read access in a file using mmap().
 //
 // Instances of this class are thread-safe, as required by the RandomAccessFile
 // API. Instances are immutable and Read() only calls thread-safe library
 // functions.
+// 使用mmap()在文件中实现随机读访问。这个类的实例是线程安全的，
+// 这是RandomAccessFile API所要求的。实例是不可变的，并且Read()只调用线程安全的库函数
 class PosixMmapReadableFile final : public RandomAccessFile {
  public:
   // mmap_base[0, length-1] points to the memory-mapped contents of the file. It
@@ -244,6 +286,8 @@ class PosixMmapReadableFile final : public RandomAccessFile {
   // |mmap_limiter| must outlive this instance. The caller must have already
   // acquired the right to use one mmap region, which will be released when this
   // instance is destroyed.
+  // Mmap base[0, length-1]指向文件的内存映射内容。它必须是成功调用mmap()的结果。该实例接管了该区域的所有权。
+  // mmap limiter|必须活过这个实例。调用方必须已经获得使用一个mmap区域的权限，该权限将在销毁此实例时被释放。
   PosixMmapReadableFile(std::string filename, char* mmap_base, size_t length,
                         Limiter* mmap_limiter)
       : mmap_base_(mmap_base),
@@ -268,10 +312,10 @@ class PosixMmapReadableFile final : public RandomAccessFile {
   }
 
  private:
-  char* const mmap_base_;
-  const size_t length_;
-  Limiter* const mmap_limiter_;
-  const std::string filename_;
+  char* const mmap_base_; // 内存映射区域的起始地址
+  const size_t length_; // 内存映射区域的长度
+  Limiter* const mmap_limiter_; // mmap限制器，用于控制内存映射的使用权限
+  const std::string filename_; // 文件名
 };
 
 class PosixWritableFile final : public WritableFile {
@@ -290,12 +334,14 @@ class PosixWritableFile final : public WritableFile {
     }
   }
 
+// 向文件中追加数据
   Status Append(const Slice& data) override {
     size_t write_size = data.size();
     const char* write_data = data.data();
 
     // Fit as much as possible into buffer.
-    size_t copy_size = std::min(write_size, kWritableFileBufferSize - pos_);
+    // 尽可能的填充缓存区
+    size_t copy_size = std::min(write_size, kWritableFileBufferSize - pos_); 
     std::memcpy(buf_ + pos_, write_data, copy_size);
     write_data += copy_size;
     write_size -= copy_size;
@@ -305,12 +351,14 @@ class PosixWritableFile final : public WritableFile {
     }
 
     // Can't fit in buffer, so need to do at least one write.
+    // 不能填满缓存区，所以需要至少一个写（刷盘操作）
     Status status = FlushBuffer();
     if (!status.ok()) {
       return status;
     }
 
     // Small writes go to buffer, large writes are written directly.
+    // 经过前面一次写入到缓存区之后，剩余的大小如果小于写入缓冲区，大于则直接写入
     if (write_size < kWritableFileBufferSize) {
       std::memcpy(buf_, write_data, write_size);
       pos_ = write_size;
@@ -319,6 +367,7 @@ class PosixWritableFile final : public WritableFile {
     return WriteUnbuffered(write_data, write_size);
   }
 
+// 关闭操作
   Status Close() override {
     Status status = FlushBuffer();
     const int close_result = ::close(fd_);
@@ -331,12 +380,14 @@ class PosixWritableFile final : public WritableFile {
 
   Status Flush() override { return FlushBuffer(); }
 
+// 同步操作
   Status Sync() override {
     // Ensure new files referred to by the manifest are in the filesystem.
     //
     // This needs to happen before the manifest file is flushed to disk, to
     // avoid crashing in a state where the manifest refers to files that are not
     // yet on disk.
+    // 确保manifest所引用的新文件在文件系统中。这需要在将清单文件刷新到磁盘之前进行，以避免在清单引用尚未在磁盘上的文件的状态下崩溃。
     Status status = SyncDirIfManifest();
     if (!status.ok()) {
       return status;
@@ -347,7 +398,7 @@ class PosixWritableFile final : public WritableFile {
       return status;
     }
 
-    return SyncFd(fd_, filename_);
+    return SyncFd(fd_, filename_); // 将文件所在的目录刷新到文件系统
   }
 
  private:
@@ -359,7 +410,7 @@ class PosixWritableFile final : public WritableFile {
 
   Status WriteUnbuffered(const char* data, size_t size) {
     while (size > 0) {
-      ssize_t write_result = ::write(fd_, data, size);
+      ssize_t write_result = ::write(fd_, data, size); // 将缓存区中的内容刷到指定的文件中
       if (write_result < 0) {
         if (errno == EINTR) {
           continue;  // Retry
@@ -372,6 +423,7 @@ class PosixWritableFile final : public WritableFile {
     return Status::OK();
   }
 
+// 如果是"mainifest"开头的文件，则将文件同步到文件系统中
   Status SyncDirIfManifest() {
     Status status;
     if (!is_manifest_) {
@@ -394,6 +446,8 @@ class PosixWritableFile final : public WritableFile {
   //
   // The path argument is only used to populate the description string in the
   // returned Status if an error occurs.
+  // 确保与给定文件描述符数据相关联的所有缓存一直刷新到持久介质，
+  // 并且可以承受电源故障。如果发生错误，path参数仅用于在返回的Status中填充描述字符串。
   static Status SyncFd(int fd, const std::string& fd_path) {
 #if HAVE_FULLFSYNC
     // On macOS and iOS, fsync() doesn't guarantee durability past power
@@ -420,6 +474,7 @@ class PosixWritableFile final : public WritableFile {
   // Returns the directory name in a path pointing to a file.
   //
   // Returns "." if the path does not contain any directory separator.
+  // 返回指向文件的路径中的目录名。如果路径不包含任何目录分隔符，则返回“.”。
   static std::string Dirname(const std::string& filename) {
     std::string::size_type separator_pos = filename.rfind('/');
     if (separator_pos == std::string::npos) {
@@ -427,6 +482,7 @@ class PosixWritableFile final : public WritableFile {
     }
     // The filename component should not contain a path separator. If it does,
     // the splitting was done incorrectly.
+    // filename组件不应该包含路径分隔符。如果是，则表示拆分操作不正确。
     assert(filename.find('/', separator_pos + 1) == std::string::npos);
 
     return filename.substr(0, separator_pos);
@@ -436,6 +492,7 @@ class PosixWritableFile final : public WritableFile {
   //
   // The returned Slice points to |filename|'s data buffer, so it is only valid
   // while |filename| is alive and unchanged.
+  // 从指向文件的路径中提取文件名。返回的Slice指向|filename|s数据缓冲区，因此只有当|filename|存在且未改变时才有效。
   static Slice Basename(const std::string& filename) {
     std::string::size_type separator_pos = filename.rfind('/');
     if (separator_pos == std::string::npos) {
@@ -450,18 +507,19 @@ class PosixWritableFile final : public WritableFile {
   }
 
   // True if the given file is a manifest file.
+  // 判断文件名是否是以"MANIFEST"开始
   static bool IsManifest(const std::string& filename) {
     return Basename(filename).starts_with("MANIFEST");
   }
 
   // buf_[0, pos_ - 1] contains data to be written to fd_.
-  char buf_[kWritableFileBufferSize];
-  size_t pos_;
-  int fd_;
+  char buf_[kWritableFileBufferSize]; // 缓存区
+  size_t pos_; // 偏移量
+  int fd_; // 文件描述符
 
-  const bool is_manifest_;  // True if the file's name starts with MANIFEST.
-  const std::string filename_;
-  const std::string dirname_;  // The directory of filename_.
+  const bool is_manifest_;  // True if the file's name starts with MANIFEST. 如果文件名以MANIFEST开头，则为True。
+  const std::string filename_; // 文件名
+  const std::string dirname_;  // The directory of filename_. 文件夹名称
 };
 
 int LockOrUnlock(int fd, bool lock) {

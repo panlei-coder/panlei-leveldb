@@ -18,13 +18,17 @@ Env::Env() = default;
 
 Env::~Env() = default;
 
+// Env的用户(包括leveldb实现)必须准备好处理不支持追加的Env)
+// 不支持最佳从操作
 Status Env::NewAppendableFile(const std::string& fname, WritableFile** result) {
   return Status::NotSupported("NewAppendableFile", fname);
 }
 
+// 删除文件夹
 Status Env::RemoveDir(const std::string& dirname) { return DeleteDir(dirname); }
 Status Env::DeleteDir(const std::string& dirname) { return RemoveDir(dirname); }
 
+// 删除文件
 Status Env::RemoveFile(const std::string& fname) { return DeleteFile(fname); }
 Status Env::DeleteFile(const std::string& fname) { return RemoveFile(fname); }
 
@@ -38,6 +42,7 @@ Logger::~Logger() = default;
 
 FileLock::~FileLock() = default;
 
+// 将指定的内容输入到日志文件中
 void Log(Logger* info_log, const char* format, ...) {
   if (info_log != nullptr) {
     std::va_list ap;
@@ -47,6 +52,7 @@ void Log(Logger* info_log, const char* format, ...) {
   }
 }
 
+// 将字符串写入到文件中
 static Status DoWriteStringToFile(Env* env, const Slice& data,
                                   const std::string& fname, bool should_sync) {
   WritableFile* file;
@@ -54,8 +60,8 @@ static Status DoWriteStringToFile(Env* env, const Slice& data,
   if (!s.ok()) {
     return s;
   }
-  s = file->Append(data);
-  if (s.ok() && should_sync) {
+  s = file->Append(data); // 将字符串追加到文件中
+  if (s.ok() && should_sync) { // 如果需要同步，则将文件刷盘
     s = file->Sync();
   }
   if (s.ok()) {
@@ -68,16 +74,19 @@ static Status DoWriteStringToFile(Env* env, const Slice& data,
   return s;
 }
 
+// 将指定的内容添加到文件中
 Status WriteStringToFile(Env* env, const Slice& data,
                          const std::string& fname) {
   return DoWriteStringToFile(env, data, fname, false);
 }
 
+// 将指定的内容添加到文件中（同步）
 Status WriteStringToFileSync(Env* env, const Slice& data,
                              const std::string& fname) {
   return DoWriteStringToFile(env, data, fname, true);
 }
 
+// 从指定的文件中读取内容到data中
 Status ReadFileToString(Env* env, const std::string& fname, std::string* data) {
   data->clear();
   SequentialFile* file;
@@ -87,7 +96,7 @@ Status ReadFileToString(Env* env, const std::string& fname, std::string* data) {
   }
   static const int kBufferSize = 8192;
   char* space = new char[kBufferSize];
-  while (true) {
+  while (true) { // 循环读取指定文件的内容
     Slice fragment;
     s = file->Read(kBufferSize, &fragment, space);
     if (!s.ok()) {
