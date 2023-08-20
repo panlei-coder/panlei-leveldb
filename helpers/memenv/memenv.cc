@@ -31,12 +31,14 @@ class FileState {
   FileState& operator=(const FileState&) = delete;
 
   // Increase the reference count.
+  // 增加引用计数
   void Ref() {
     MutexLock lock(&refs_mutex_);
     ++refs_;
   }
 
   // Decrease the reference count. Delete if this is the last reference.
+  // 减少引用计数
   void Unref() {
     bool do_delete = false;
 
@@ -44,7 +46,7 @@ class FileState {
       MutexLock lock(&refs_mutex_);
       --refs_;
       assert(refs_ >= 0);
-      if (refs_ <= 0) {
+      if (refs_ <= 0) { // 当引用计数为0时，需要将当前FileState对象销毁
         do_delete = true;
       }
     }
@@ -54,11 +56,13 @@ class FileState {
     }
   }
 
+// 获取总大小
   uint64_t Size() const {
     MutexLock lock(&blocks_mutex_);
     return size_;
   }
 
+// 截断操作（清空）
   void Truncate() {
     MutexLock lock(&blocks_mutex_);
     for (char*& block : blocks_) {
@@ -68,6 +72,7 @@ class FileState {
     size_ = 0;
   }
 
+// 内存中读取
   Status Read(uint64_t offset, size_t n, Slice* result, char* scratch) const {
     MutexLock lock(&blocks_mutex_);
     if (offset > size_) {
@@ -89,8 +94,8 @@ class FileState {
     char* dst = scratch;
 
     while (bytes_to_copy > 0) {
-      size_t avail = kBlockSize - block_offset;
-      if (avail > bytes_to_copy) {
+      size_t avail = kBlockSize - block_offset; // 判断要读取的内容是否都包含在当前块中
+      if (avail > bytes_to_copy) { // 后续的块中仍然包含了要读取的内容
         avail = bytes_to_copy;
       }
       std::memcpy(dst, blocks_[block] + block_offset, avail);
@@ -101,17 +106,18 @@ class FileState {
       block_offset = 0;
     }
 
-    *result = Slice(scratch, n);
+    *result = Slice(scratch, n); // scratch用去存放读取内容的缓存区，而result只是引用了这段缓存区，并没有真正的创建一块内存空间
     return Status::OK();
   }
 
+// 追加内容到当前对象中
   Status Append(const Slice& data) {
     const char* src = data.data();
     size_t src_len = data.size();
 
     MutexLock lock(&blocks_mutex_);
     while (src_len > 0) {
-      size_t avail;
+      size_t avail; // 目前剩余的空间
       size_t offset = size_ % kBlockSize;
 
       if (offset != 0) {
@@ -119,12 +125,12 @@ class FileState {
         avail = kBlockSize - offset;
       } else {
         // No room in the last block; push new one.
-        blocks_.push_back(new char[kBlockSize]);
+        blocks_.push_back(new char[kBlockSize]); // 创建一个空闲块，用来存放新添加的内容
         avail = kBlockSize;
       }
 
       if (avail > src_len) {
-        avail = src_len;
+        avail = src_len; // 当前需要拷贝字节大小
       }
       std::memcpy(blocks_.back() + offset, src, avail);
       src_len -= avail;
@@ -141,14 +147,15 @@ class FileState {
   // Private since only Unref() should be used to delete it.
   ~FileState() { Truncate(); }
 
-  port::Mutex refs_mutex_;
-  int refs_ GUARDED_BY(refs_mutex_);
+  port::Mutex refs_mutex_;  // 引用计数的锁
+  int refs_ GUARDED_BY(refs_mutex_); // 引用计数
 
-  mutable port::Mutex blocks_mutex_;
+  mutable port::Mutex blocks_mutex_; // blocks_的锁
   std::vector<char*> blocks_ GUARDED_BY(blocks_mutex_);
-  uint64_t size_ GUARDED_BY(blocks_mutex_);
+  uint64_t size_ GUARDED_BY(blocks_mutex_); // 总的已经存放内容的大小
 };
 
+// 顺序读的实现
 class SequentialFileImpl : public SequentialFile {
  public:
   explicit SequentialFileImpl(FileState* file) : file_(file), pos_(0) {
@@ -157,6 +164,7 @@ class SequentialFileImpl : public SequentialFile {
 
   ~SequentialFileImpl() override { file_->Unref(); }
 
+// 读取
   Status Read(size_t n, Slice* result, char* scratch) override {
     Status s = file_->Read(pos_, n, result, scratch);
     if (s.ok()) {
@@ -165,11 +173,12 @@ class SequentialFileImpl : public SequentialFile {
     return s;
   }
 
+// 将pos_向后移动n字节的位置
   Status Skip(uint64_t n) override {
     if (pos_ > file_->Size()) {
       return Status::IOError("pos_ > file_->Size()");
     }
-    const uint64_t available = file_->Size() - pos_;
+    const uint64_t available = file_->Size() - pos_; // 剩余可用空间
     if (n > available) {
       n = available;
     }
@@ -178,10 +187,11 @@ class SequentialFileImpl : public SequentialFile {
   }
 
  private:
-  FileState* file_;
-  uint64_t pos_;
+  FileState* file_;  // 实际存放数据的文件句柄
+  uint64_t pos_; // 指向已经读取的位置
 };
 
+// 随机读
 class RandomAccessFileImpl : public RandomAccessFile {
  public:
   explicit RandomAccessFileImpl(FileState* file) : file_(file) { file_->Ref(); }
@@ -197,6 +207,7 @@ class RandomAccessFileImpl : public RandomAccessFile {
   FileState* file_;
 };
 
+// 顺序写
 class WritableFileImpl : public WritableFile {
  public:
   WritableFileImpl(FileState* file) : file_(file) { file_->Ref(); }
@@ -206,6 +217,8 @@ class WritableFileImpl : public WritableFile {
   Status Append(const Slice& data) override { return file_->Append(data); }
 
   Status Close() override { return Status::OK(); }
+
+  // 由于不涉及到磁盘操作，因为Flush和Sync不涉及具体的逻辑
   Status Flush() override { return Status::OK(); }
   Status Sync() override { return Status::OK(); }
 
@@ -218,13 +231,14 @@ class NoOpLogger : public Logger {
   void Logv(const char* format, std::va_list ap) override {}
 };
 
+// 将所有的操作都置于内存中，从而提升I/O的读速度（全内存读写）
 class InMemoryEnv : public EnvWrapper {
  public:
   explicit InMemoryEnv(Env* base_env) : EnvWrapper(base_env) {}
 
   ~InMemoryEnv() override {
     for (const auto& kvp : file_map_) {
-      kvp.second->Unref();
+      kvp.second->Unref(); // 采用引用计数的方式来控制资源的释放
     }
   }
 
@@ -264,7 +278,7 @@ class InMemoryEnv : public EnvWrapper {
       file = new FileState();
       file->Ref();
       file_map_[fname] = file;
-    } else {
+    } else { // 如果想要创建的文件已经存在，则将已经存在的文件清空
       file = it->second;
       file->Truncate();
     }
@@ -286,11 +300,13 @@ class InMemoryEnv : public EnvWrapper {
     return Status::OK();
   }
 
+// 判断文件是否存在
   bool FileExists(const std::string& fname) override {
     MutexLock lock(&mutex_);
     return file_map_.find(fname) != file_map_.end();
   }
 
+// 获取指定文件夹下的所有子目录
   Status GetChildren(const std::string& dir,
                      std::vector<std::string>* result) override {
     MutexLock lock(&mutex_);
@@ -377,7 +393,7 @@ class InMemoryEnv : public EnvWrapper {
 
  private:
   // Map from filenames to FileState objects, representing a simple file system.
-  typedef std::map<std::string, FileState*> FileSystem;
+  typedef std::map<std::string, FileState*> FileSystem;  // <文件名，FileState>
 
   port::Mutex mutex_;
   FileSystem file_map_ GUARDED_BY(mutex_);

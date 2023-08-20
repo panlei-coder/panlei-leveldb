@@ -522,18 +522,20 @@ class PosixWritableFile final : public WritableFile {
   const std::string dirname_;  // The directory of filename_. 文件夹名称
 };
 
+// posix的文件加解锁操作::flock和::fcntl
 int LockOrUnlock(int fd, bool lock) {
   errno = 0;
   struct ::flock file_lock_info;
   std::memset(&file_lock_info, 0, sizeof(file_lock_info));
-  file_lock_info.l_type = (lock ? F_WRLCK : F_UNLCK);
-  file_lock_info.l_whence = SEEK_SET;
-  file_lock_info.l_start = 0;
-  file_lock_info.l_len = 0;  // Lock/unlock entire file.
-  return ::fcntl(fd, F_SETLK, &file_lock_info);
+  file_lock_info.l_type = (lock ? F_WRLCK : F_UNLCK);  // 设置加解锁的类型
+  file_lock_info.l_whence = SEEK_SET; // 表示加解锁操作从文件的SEEK_SET起始位置开始
+  file_lock_info.l_start = 0; // 偏移量为0
+  file_lock_info.l_len = 0;  // Lock/unlock entire file. 加解锁具体的内容大小
+  return ::fcntl(fd, F_SETLK, &file_lock_info); // 对文件进行加解锁操作
 }
 
 // Instances are thread-safe because they are immutable.
+// 实例是线程安全的，因为它们是不可变的。
 class PosixFileLock : public FileLock {
  public:
   PosixFileLock(int fd, std::string filename)
@@ -543,8 +545,8 @@ class PosixFileLock : public FileLock {
   const std::string& filename() const { return filename_; }
 
  private:
-  const int fd_;
-  const std::string filename_;
+  const int fd_; // 文件描述符
+  const std::string filename_; // 文件名
 };
 
 // Tracks the files locked by PosixEnv::LockFile().
@@ -554,14 +556,19 @@ class PosixFileLock : public FileLock {
 // same process.
 //
 // Instances are thread-safe because all member data is guarded by a mutex.
+// 跟踪PosixEnv::LockFile()锁定的文件。
+// 我们维护一个单独的集合，而不是依赖于fcntl(F SETLK)，因为fcntl(F SETLK)对来自同一进程的多个使用不提供任何保护。
+// 实例是线程安全的，因为所有成员数据都由互斥锁保护。
 class PosixLockTable {
  public:
+ // 添加被锁住的文件到locked_files_中
   bool Insert(const std::string& fname) LOCKS_EXCLUDED(mu_) {
     mu_.Lock();
     bool succeeded = locked_files_.insert(fname).second;
     mu_.Unlock();
     return succeeded;
   }
+  // 从locked_files_中删除文件
   void Remove(const std::string& fname) LOCKS_EXCLUDED(mu_) {
     mu_.Lock();
     locked_files_.erase(fname);
@@ -569,8 +576,8 @@ class PosixLockTable {
   }
 
  private:
-  port::Mutex mu_;
-  std::set<std::string> locked_files_ GUARDED_BY(mu_);
+  port::Mutex mu_; // 使用c++的mutex封装的一个锁类型
+  std::set<std::string> locked_files_ GUARDED_BY(mu_); // 被锁住的文件集合（使用GUARDED_BY(mu_)标记该变量收到互斥锁的保护）
 };
 
 class PosixEnv : public Env {
@@ -583,6 +590,7 @@ class PosixEnv : public Env {
     std::abort();
   }
 
+// 创建一个顺序可读的文件
   Status NewSequentialFile(const std::string& filename,
                            SequentialFile** result) override {
     int fd = ::open(filename.c_str(), O_RDONLY | kOpenBaseFlags);
@@ -595,6 +603,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 创建一个随机可读的文件
   Status NewRandomAccessFile(const std::string& filename,
                              RandomAccessFile** result) override {
     *result = nullptr;
@@ -603,6 +612,13 @@ class PosixEnv : public Env {
       return PosixError(filename, errno);
     }
 
+    // 只有当内存映射文件个数超出限制或内存映射文件操作失败时，才会采用pread的方法，实现文件随机读取操作对象
+    /*
+    ::mmap 将文件映射到内存中，通过直接访问内存来读取文件内容，适用于大型文件的随机读取操作，
+    具有高效性和方便性，但需要注意内存管理和同步的问题。
+    ::pread 从文件指定位置读取数据，适用于随机读取操作，不会修改文件的当前偏移量，
+    适用于多线程或多进程环境下的并发读取操作，但相对于 ::mmap 会涉及到文件打开和关闭的操作。
+    */
     if (!mmap_limiter_.Acquire()) {
       *result = new PosixRandomAccessFile(filename, fd, &fd_limiter_);
       return Status::OK();
@@ -628,10 +644,11 @@ class PosixEnv : public Env {
     return status;
   }
 
+// 创建一个顺序可写的文件，不论文件存在与否，均创建新文件
   Status NewWritableFile(const std::string& filename,
                          WritableFile** result) override {
     int fd = ::open(filename.c_str(),
-                    O_TRUNC | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
+                    O_TRUNC | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644); // 表示文件所有者具有读写权限，其他用户只有读权限（110 100 100）
     if (fd < 0) {
       *result = nullptr;
       return PosixError(filename, errno);
@@ -641,6 +658,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 创建一个顺序可写的文件，如果文件存在，则在原文件中继续添加，如果文件不存在，则创建新文件
   Status NewAppendableFile(const std::string& filename,
                            WritableFile** result) override {
     int fd = ::open(filename.c_str(),
@@ -654,10 +672,12 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 判断文件是否存在
   bool FileExists(const std::string& filename) override {
-    return ::access(filename.c_str(), F_OK) == 0;
+    return ::access(filename.c_str(), F_OK) == 0;  // 文件是否访问成功
   }
 
+// 返回指定路径下所有的子文件
   Status GetChildren(const std::string& directory_path,
                      std::vector<std::string>* result) override {
     result->clear();
@@ -673,13 +693,19 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 删除指定文件
   Status RemoveFile(const std::string& filename) override {
+    /*
+    unlink实际上是通过减少当前文件的链接计数，如果链接计数减少到0，
+    表示该文件没有任何链接指向它，操作系统内核会将该文件的数据块标记为可重用，并从文件系统中删除该文件的inode。
+    */
     if (::unlink(filename.c_str()) != 0) {
       return PosixError(filename, errno);
     }
     return Status::OK();
   }
 
+// 创建新的文件夹
   Status CreateDir(const std::string& dirname) override {
     if (::mkdir(dirname.c_str(), 0755) != 0) {
       return PosixError(dirname, errno);
@@ -687,6 +713,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 删除指定文件夹
   Status RemoveDir(const std::string& dirname) override {
     if (::rmdir(dirname.c_str()) != 0) {
       return PosixError(dirname, errno);
@@ -694,9 +721,10 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 获取文件大小
   Status GetFileSize(const std::string& filename, uint64_t* size) override {
     struct ::stat file_stat;
-    if (::stat(filename.c_str(), &file_stat) != 0) {
+    if (::stat(filename.c_str(), &file_stat) != 0) { // ::stat检查指定文件的状态
       *size = 0;
       return PosixError(filename, errno);
     }
@@ -704,6 +732,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 文件重命名
   Status RenameFile(const std::string& from, const std::string& to) override {
     if (std::rename(from.c_str(), to.c_str()) != 0) {
       return PosixError(from, errno);
@@ -711,6 +740,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 锁定指定文件，避免引发多线程操作对同一个文件的竞争访问
   Status LockFile(const std::string& filename, FileLock** lock) override {
     *lock = nullptr;
 
@@ -735,6 +765,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 释放文件锁
   Status UnlockFile(FileLock* lock) override {
     PosixFileLock* posix_file_lock = static_cast<PosixFileLock*>(lock);
     if (LockOrUnlock(posix_file_lock->fd(), false) == -1) {
@@ -746,15 +777,18 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// Schedule函数将某个函数调度到后台线程中执行，后台线程长期存在，并不会随着函数执行完毕而销毁
+// 而如果没有需要执行的函数，后台线程处于等待状态。
   void Schedule(void (*background_work_function)(void* background_work_arg),
                 void* background_work_arg) override;
-
+// StartThread函数则是启动一个新的线程，并且在新的线程中执行指定的函数操作，当指定的函数执行完毕后，该线程也将被销毁
   void StartThread(void (*thread_main)(void* thread_main_arg),
                    void* thread_main_arg) override {
     std::thread new_thread(thread_main, thread_main_arg);
-    new_thread.detach();
+    new_thread.detach(); // 非阻塞式
   }
 
+// 返回用于测试任务的临时文件夹
   Status GetTestDirectory(std::string* result) override {
     const char* env = std::getenv("TEST_TMPDIR");
     if (env && env[0] != '\0') {
@@ -772,6 +806,7 @@ class PosixEnv : public Env {
     return Status::OK();
   }
 
+// 创建并返回一个Log文件
   Status NewLogger(const std::string& filename, Logger** result) override {
     int fd = ::open(filename.c_str(),
                     O_APPEND | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
@@ -791,6 +826,7 @@ class PosixEnv : public Env {
     }
   }
 
+// 返回当前的时间戳，单位为ms，可用计算某段代码的执行时间
   uint64_t NowMicros() override {
     static constexpr uint64_t kUsecondsPerSecond = 1000000;
     struct ::timeval tv;
@@ -798,6 +834,7 @@ class PosixEnv : public Env {
     return static_cast<uint64_t>(tv.tv_sec) * kUsecondsPerSecond + tv.tv_usec;
   }
 
+// 利用高精度计时器做休眠指定的时间
   void SleepForMicroseconds(int micros) override {
     std::this_thread::sleep_for(std::chrono::microseconds(micros));
   }
@@ -815,6 +852,8 @@ class PosixEnv : public Env {
   // background thread.
   //
   // This structure is thread-safe because it is immutable.
+  // 将工作项数据存储在Schedule()调用中。实例在调用Schedule()的线程上构造，
+  // 并在后台线程上使用。这个结构是线程安全的，因为它是不可变的。
   struct BackgroundWorkItem {
     explicit BackgroundWorkItem(void (*function)(void* arg), void* arg)
         : function(function), arg(arg) {}
@@ -823,35 +862,41 @@ class PosixEnv : public Env {
     void* const arg;
   };
 
-  port::Mutex background_work_mutex_;
-  port::CondVar background_work_cv_ GUARDED_BY(background_work_mutex_);
-  bool started_background_thread_ GUARDED_BY(background_work_mutex_);
+  port::Mutex background_work_mutex_;  // 后台运行的互斥锁
+  port::CondVar background_work_cv_ GUARDED_BY(background_work_mutex_);  // 后台运行的条件变量
+  bool started_background_thread_ GUARDED_BY(background_work_mutex_); // 是否开启了后台线程
 
-  std::queue<BackgroundWorkItem> background_work_queue_
-      GUARDED_BY(background_work_mutex_);
+  std::queue<BackgroundWorkItem> background_work_queue_  
+      GUARDED_BY(background_work_mutex_); // 后台工作队列
 
-  PosixLockTable locks_;  // Thread-safe.
-  Limiter mmap_limiter_;  // Thread-safe.
-  Limiter fd_limiter_;    // Thread-safe.
+  PosixLockTable locks_;  // Thread-safe.   // 文件锁的集合
+  /*
+  限制只读文件描述符和 mmap 文件使用，这样我们就不会用完文件描述符或虚拟内存，或者遇到非常大的数据库的内核性能问题。
+  */
+  Limiter mmap_limiter_;  // Thread-safe.  // mmap资源限制
+  Limiter fd_limiter_;    // Thread-safe. // 文件描述符资源限制
 };
 
 // Return the maximum number of concurrent mmaps.
 int MaxMmaps() { return g_mmap_limit; }
 
 // Return the maximum number of read-only files to keep open.
+// 返回要保持打开的只读文件的最大数目。
 int MaxOpenFiles() {
   if (g_open_read_only_file_limit >= 0) {
     return g_open_read_only_file_limit;
   }
 #ifdef __Fuchsia__
   // Fuchsia doesn't implement getrlimit.
+  // 如果在 Fuchsia 操作系统上运行，则将 g_open_read_only_file_limit 设置为50，因为该操作系统不支持 getrlimit 函数。 
   g_open_read_only_file_limit = 50;
 #else
+// 如果在其他操作系统上运行，则使用 getrlimit 函数获取当前系统中可以打开的最大文件数量，并将结果存储在变量 rlim 中。 
   struct ::rlimit rlim;
-  if (::getrlimit(RLIMIT_NOFILE, &rlim)) {
+  if (::getrlimit(RLIMIT_NOFILE, &rlim)) { // 获取失败
     // getrlimit failed, fallback to hard-coded default.
     g_open_read_only_file_limit = 50;
-  } else if (rlim.rlim_cur == RLIM_INFINITY) {
+  } else if (rlim.rlim_cur == RLIM_INFINITY) { // 如果获取到的最大文件数量是无限的
     g_open_read_only_file_limit = std::numeric_limits<int>::max();
   } else {
     // Allow use of 20% of available file descriptors for read-only files.
@@ -869,6 +914,7 @@ PosixEnv::PosixEnv()
       mmap_limiter_(MaxMmaps()),
       fd_limiter_(MaxOpenFiles()) {}
 
+// 创建后台线程
 void PosixEnv::Schedule(
     void (*background_work_function)(void* background_work_arg),
     void* background_work_arg) {
@@ -882,8 +928,9 @@ void PosixEnv::Schedule(
   }
 
   // If the queue is empty, the background thread may be waiting for work.
+  // 如果后台线程的队列是空的，则后台线程需要进行等待
   if (background_work_queue_.empty()) {
-    background_work_cv_.Signal();
+    background_work_cv_.Signal(); // 唤醒处于等待的线程
   }
 
   background_work_queue_.emplace(background_work_function, background_work_arg);
@@ -895,10 +942,12 @@ void PosixEnv::BackgroundThreadMain() {
     background_work_mutex_.Lock();
 
     // Wait until there is work to be done.
+    // 如果队列为空，则后台线程处理等待状态
     while (background_work_queue_.empty()) {
       background_work_cv_.Wait();
     }
 
+// 执行队首的任务
     assert(!background_work_queue_.empty());
     auto background_work_function = background_work_queue_.front().function;
     void* background_work_arg = background_work_queue_.front().arg;
@@ -923,6 +972,10 @@ namespace {
 //     static PlatformSingletonEnv default_env;
 //     return default_env.env();
 //   }
+/*
+包装一个从未创建析构函数的Env实例。预期用法:using PlatformSingletonEnv = SingletonEnv&lt;PlatformEnv&gt;;void ConfigurePosixEnv(int param) {PlatformSingletonEnv::AssertEnvNotInitialized();设置全局配置标志。} Env* Env::Default(){静态PlatformSingletonEnv默认Env;返回默认env.env();
+*/
+// 单例模式
 template <typename EnvType>
 class SingletonEnv {
  public:
@@ -951,9 +1004,9 @@ class SingletonEnv {
 
  private:
   typename std::aligned_storage<sizeof(EnvType), alignof(EnvType)>::type
-      env_storage_;
+      env_storage_; // 使用了std::aligned_storage来指定对象的对齐方式
 #if !defined(NDEBUG)
-  static std::atomic<bool> env_initialized_;
+  static std::atomic<bool> env_initialized_; // 标记是否被初始化了
 #endif  // !defined(NDEBUG)
 };
 
@@ -966,16 +1019,19 @@ using PosixDefaultEnv = SingletonEnv<PosixEnv>;
 
 }  // namespace
 
+// 设置只读文件描述符限制
 void EnvPosixTestHelper::SetReadOnlyFDLimit(int limit) {
   PosixDefaultEnv::AssertEnvNotInitialized();
   g_open_read_only_file_limit = limit;
 }
 
+// 设置只读内存映射限制
 void EnvPosixTestHelper::SetReadOnlyMMapLimit(int limit) {
   PosixDefaultEnv::AssertEnvNotInitialized();
   g_mmap_limit = limit;
 }
 
+// 创建一个静态局部变量 env_container，该变量是 PosixDefaultEnv 类的对象，保证只会被初始化一次。
 Env* Env::Default() {
   static PosixDefaultEnv env_container;
   return env_container.env();
