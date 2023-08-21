@@ -64,7 +64,7 @@ constexpr const int kOpenBaseFlags = O_CLOEXEC;
 constexpr const int kOpenBaseFlags = 0;
 #endif  // defined(HAVE_O_CLOEXEC)
 
-constexpr const size_t kWritableFileBufferSize = 65536;
+constexpr const size_t kWritableFileBufferSize = 65536; // 64KB
 
 // 返回错误
 Status PosixError(const std::string& context, int error_number) {
@@ -350,6 +350,7 @@ class PosixWritableFile final : public WritableFile {
       return Status::OK();
     }
 
+    // 如果data数据太大,那么需要分多次写入,所以至少需要刷盘一次
     // Can't fit in buffer, so need to do at least one write.
     // 不能填满缓存区，所以需要至少一个写（刷盘操作）
     Status status = FlushBuffer();
@@ -358,7 +359,7 @@ class PosixWritableFile final : public WritableFile {
     }
 
     // Small writes go to buffer, large writes are written directly.
-    // 经过前面一次写入到缓存区之后，剩余的大小如果小于写入缓冲区，大于则直接写入
+    // 经过前面一次写入到缓存区之后，剩余的大小如果小于则写入缓冲区，大于则直接写入文件
     if (write_size < kWritableFileBufferSize) {
       std::memcpy(buf_, write_data, write_size);
       pos_ = write_size;

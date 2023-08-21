@@ -15,6 +15,7 @@ namespace log {
 
 Reader::Reporter::~Reporter() = default;
 
+// 构造
 Reader::Reader(SequentialFile* file, Reporter* reporter, bool checksum,
                uint64_t initial_offset)
     : file_(file),
@@ -28,20 +29,25 @@ Reader::Reader(SequentialFile* file, Reporter* reporter, bool checksum,
       initial_offset_(initial_offset),
       resyncing_(initial_offset > 0) {}
 
+// 析构
 Reader::~Reader() { delete[] backing_store_; }
 
+// 跳到initial_offset_位置所在块的开头
 bool Reader::SkipToInitialBlock() {
-  const size_t offset_in_block = initial_offset_ % kBlockSize;
-  uint64_t block_start_location = initial_offset_ - offset_in_block;
+  const size_t offset_in_block = initial_offset_ % kBlockSize; // 在某个具体块中的偏移量
+  uint64_t block_start_location = initial_offset_ - offset_in_block; // 开始的位置
 
   // Don't search a block if we'd be in the trailer
+  // 如果在块中的偏移量是块的倒数6个字节内,则直接跳过这部分,因为它是被"0x00"填充的
   if (offset_in_block > kBlockSize - 6) {
     block_start_location += kBlockSize;
   }
 
+  // 缓冲区结束后第一个位置的偏移量
   end_of_buffer_offset_ = block_start_location;
 
   // Skip to start of first block that can contain the initial record
+  // 跳到可以包含初始记录的第一个块的开始
   if (block_start_location > 0) {
     Status skip_status = file_->Skip(block_start_location);
     if (!skip_status.ok()) {
@@ -65,6 +71,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   bool in_fragmented_record = false;
   // Record offset of the logical record that we're reading
   // 0 is a dummy value to make compilers happy
+  // 读取0的逻辑记录的记录偏移量是一个让编译器满意的虚拟值
   uint64_t prospective_record_offset = 0;
 
   Slice fragment;
@@ -74,6 +81,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
     // ReadPhysicalRecord may have only had an empty trailer remaining in its
     // internal buffer. Calculate the offset of the next physical record now
     // that it has returned, properly accounting for its header size.
+    // ReadPhysicalRecord的内部缓冲区中可能只剩下一个空的预告片。
+    // 计算已返回的下一条物理记录的偏移量，适当地考虑其标头大小。
     uint64_t physical_record_offset =
         end_of_buffer_offset_ - buffer_.size() - kHeaderSize - fragment.size();
 
@@ -95,6 +104,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
           // it could emit an empty kFirstType record at the tail end
           // of a block followed by a kFullType or kFirstType record
           // at the beginning of the next block.
+          // 处理log::Writer早期版本中的错误，它可以在块的尾部发出一个空的kFirstType记录，
+          // 然后在下一个块的开头发出一个kFullType或kFirstType记录。
           if (!scratch->empty()) {
             ReportCorruption(scratch->size(), "partial record without end(1)");
           }
@@ -111,6 +122,8 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
           // it could emit an empty kFirstType record at the tail end
           // of a block followed by a kFullType or kFirstType record
           // at the beginning of the next block.
+          // 处理log::Writer早期版本中的错误，它可以在块的尾部发出一个空的kFirstType记录，
+          // 然后在下一个块的开头发出一个kFullType或kFirstType记录。
           if (!scratch->empty()) {
             ReportCorruption(scratch->size(), "partial record without end(2)");
           }
@@ -118,7 +131,7 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
         prospective_record_offset = physical_record_offset;
         scratch->assign(fragment.data(), fragment.size());
         in_fragmented_record = true;
-        break;
+        break; // 后续要接着读取该记录的后续内容
 
       case kMiddleType:
         if (!in_fragmented_record) {
@@ -173,8 +186,10 @@ bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   return false;
 }
 
+// 返回最后一条记录的偏移量
 uint64_t Reader::LastRecordOffset() { return last_record_offset_; }
 
+// 报告错误
 void Reader::ReportCorruption(uint64_t bytes, const char* reason) {
   ReportDrop(bytes, Status::Corruption(reason));
 }
@@ -186,9 +201,10 @@ void Reader::ReportDrop(uint64_t bytes, const Status& reason) {
   }
 }
 
+// 读取实际的记录,总是读取整个Block
 unsigned int Reader::ReadPhysicalRecord(Slice* result) {
   while (true) {
-    if (buffer_.size() < kHeaderSize) {
+    if (buffer_.size() < kHeaderSize) { // 意味着剩余内容是用"0x00"填充的
       if (!eof_) {
         // Last read was a full read, so this is a trailer to skip
         buffer_.clear();
@@ -200,7 +216,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
           eof_ = true;
           return kEof;
         } else if (buffer_.size() < kBlockSize) {
-          eof_ = true;
+          eof_ = true; // 标记读取到的buffer_的大小小于kBlockSize,说明没有读取完整的Block
         }
         continue;
       } else {
@@ -208,12 +224,15 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
         // end of the file, which can be caused by the writer crashing in the
         // middle of writing the header. Instead of considering this an error,
         // just report EOF.
+        // 注意，如果缓冲区非空，我们在文件末尾有一个被截断的头，这可能是由于写入器在
+        // 写入头的过程中崩溃造成的。而不是认为这是一个错误，只是报告EOF。
         buffer_.clear();
         return kEof;
       }
     }
 
     // Parse the header
+    // TODO 为什么header一定指向的是record的开头位置 ??? 
     const char* header = buffer_.data();
     const uint32_t a = static_cast<uint32_t>(header[4]) & 0xff;
     const uint32_t b = static_cast<uint32_t>(header[5]) & 0xff;
@@ -229,6 +248,8 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       // If the end of the file has been reached without reading |length| bytes
       // of payload, assume the writer died in the middle of writing the record.
       // Don't report a corruption.
+      // 如果到达文件的末尾而没有读取负载的|length|字节，
+      // 则假定写入器在写入记录的过程中死亡。不要报告腐败。
       return kEof;
     }
 
@@ -236,6 +257,8 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
       // Skip zero length record without reporting any drops since
       // such records are produced by the mmap based writing code in
       // env_posix.cc that preallocates file regions.
+      // 跳过零长度记录而不报告任何丢失，因为这样的记录是由基于mmap的
+      // 编写代码在env posix.cc，预分配文件区域。
       buffer_.clear();
       return kBadRecord;
     }
@@ -259,6 +282,7 @@ unsigned int Reader::ReadPhysicalRecord(Slice* result) {
     buffer_.remove_prefix(kHeaderSize + length);
 
     // Skip physical record that started before initial_offset_
+    // 跳过在初始偏移量之前开始的物理记录
     if (end_of_buffer_offset_ - buffer_.size() - kHeaderSize - length <
         initial_offset_) {
       result->clear();

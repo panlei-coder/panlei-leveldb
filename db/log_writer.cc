@@ -13,6 +13,7 @@
 namespace leveldb {
 namespace log {
 
+// 针对RecordType的五种类型生成对应的crc校验码
 static void InitTypeCrc(uint32_t* type_crc) {
   for (int i = 0; i <= kMaxRecordType; i++) {
     char t = static_cast<char>(i);
@@ -20,6 +21,7 @@ static void InitTypeCrc(uint32_t* type_crc) {
   }
 }
 
+// 初始化构造
 Writer::Writer(WritableFile* dest) : dest_(dest), block_offset_(0) {
   InitTypeCrc(type_crc_);
 }
@@ -31,6 +33,7 @@ Writer::Writer(WritableFile* dest, uint64_t dest_length)
 
 Writer::~Writer() = default;
 
+// 向WAL日志文件中写日志
 Status Writer::AddRecord(const Slice& slice) {
   const char* ptr = slice.data();
   size_t left = slice.size();
@@ -38,22 +41,31 @@ Status Writer::AddRecord(const Slice& slice) {
   // Fragment the record if necessary and emit it.  Note that if slice
   // is empty, we still want to iterate once to emit a single
   // zero-length record
+  // 如有必要，将记录分段并发出。注意，如果slice为空，我们仍然希望迭代一次以产生一条零长度的记录
   Status s;
   bool begin = true;
   do {
-    const int leftover = kBlockSize - block_offset_;
+    const int leftover = kBlockSize - block_offset_; // 剩余空间
     assert(leftover >= 0);
-    if (leftover < kHeaderSize) {
+    if (leftover < kHeaderSize) { // 剩余空间是否小于kHeaderSize
       // Switch to a new block
       if (leftover > 0) {
         // Fill the trailer (literal below relies on kHeaderSize being 7)
+        // 填充trailer(下面的文字依赖于kHeaderSize为7)
         static_assert(kHeaderSize == 7, "");
+        /*
+        这里对应着PosixWritableFile::Append方法,PosixWritableFile中的缓存区大小为64KB,
+        而kBlockSize为32KB,意味着缓存区为两个Block大小(暂时没有感觉到特殊的用意),
+        当第一个Block满时,直接用第二个Block,
+        当第二个Block满时,会再下一次添加的时候进行刷盘操作,所以后面可以直接让block_offset_重置为0
+        */
         dest_->Append(Slice("\x00\x00\x00\x00\x00\x00", leftover));
       }
       block_offset_ = 0;
     }
 
     // Invariant: we never leave < kHeaderSize bytes in a block.
+    // Invariant:我们从不在块中留下&lt; kHeaderSize字节。
     assert(kBlockSize - block_offset_ - kHeaderSize >= 0);
 
     const size_t avail = kBlockSize - block_offset_ - kHeaderSize;
@@ -61,13 +73,13 @@ Status Writer::AddRecord(const Slice& slice) {
 
     RecordType type;
     const bool end = (left == fragment_length);
-    if (begin && end) {
+    if (begin && end) { // 刚好装下
       type = kFullType;
-    } else if (begin) {
+    } else if (begin) { // 不能全部装下,且当前是第一部分
       type = kFirstType;
-    } else if (end) {
+    } else if (end) { // 不能全部装下,且当前是最后一部分
       type = kLastType;
-    } else {
+    } else {  // 不能全部装下,这是中间部分
       type = kMiddleType;
     }
 
@@ -84,18 +96,20 @@ Status Writer::EmitPhysicalRecord(RecordType t, const char* ptr,
   assert(length <= 0xffff);  // Must fit in two bytes
   assert(block_offset_ + kHeaderSize + length <= kBlockSize);
 
-  // Format the header
+  // Format the header(crc校验位先空出来,填充length和RecordType)
   char buf[kHeaderSize];
   buf[4] = static_cast<char>(length & 0xff);
   buf[5] = static_cast<char>(length >> 8);
   buf[6] = static_cast<char>(t);
 
   // Compute the crc of the record type and the payload.
+  // 计算记录类型和有效负载的crc。
   uint32_t crc = crc32c::Extend(type_crc_[t], ptr, length);
   crc = crc32c::Mask(crc);  // Adjust for storage
   EncodeFixed32(buf, crc);
 
   // Write the header and the payload
+  // 看69行(const size_t avail = kBlockSize - block_offset_ - kHeaderSize;)
   Status s = dest_->Append(Slice(buf, kHeaderSize));
   if (s.ok()) {
     s = dest_->Append(Slice(ptr, length));

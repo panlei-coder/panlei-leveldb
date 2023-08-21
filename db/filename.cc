@@ -14,12 +14,14 @@
 namespace leveldb {
 
 // A utility routine: write "data" to the named file and Sync() it.
+// 一个实用程序例程:将数据写入指定文件并Sync()它。
 Status WriteStringToFileSync(Env* env, const Slice& data,
                              const std::string& fname);
 
 static std::string MakeFileName(const std::string& dbname, uint64_t number,
                                 const char* suffix) {
   char buf[100];
+  // 计算文件名的字符串长度
   std::snprintf(buf, sizeof(buf), "/%06llu.%s",
                 static_cast<unsigned long long>(number), suffix);
   return dbname + buf;
@@ -101,6 +103,7 @@ bool ParseFileName(const std::string& filename, uint64_t* number,
   } else {
     // Avoid strtoull() to keep filename format independent of the
     // current locale
+    // 避免strtoull()以保持文件名格式独立于当前语言环境
     uint64_t num;
     if (!ConsumeDecimalNumber(&rest, &num)) {
       return false;
@@ -130,9 +133,13 @@ Status SetCurrentFile(Env* env, const std::string& dbname,
   std::string tmp = TempFileName(dbname, descriptor_number);
   Status s = WriteStringToFileSync(env, contents.ToString() + "\n", tmp);
   if (s.ok()) {
+    // Rename manifest file to its proper name
+    // 将清单文件重命名为其适当的名称
     s = env->RenameFile(tmp, CurrentFileName(dbname));
   }
   if (!s.ok()) {
+    // Fall back to a noop if rename fails
+    // 如果重命名失败，则退回到noop
     env->RemoveFile(tmp);
   }
   return s;

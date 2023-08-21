@@ -1225,12 +1225,14 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     // during this phase since &w is currently responsible for logging
     // and protects against concurrent loggers and concurrent writes
     // into mem_.
+    // 添加到日志并应用到memtable。我们可以在此阶段释放锁，
+    // 因为&amp;w目前负责日志记录，并防止并发日志记录器和并发写入mem。
     {
       mutex_.Unlock();
       status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
       bool sync_error = false;
       if (status.ok() && options.sync) {
-        status = logfile_->Sync();
+        status = logfile_->Sync(); // wal日志，因此在写完之后，会立马有个Sync同步操作
         if (!status.ok()) {
           sync_error = true;
         }
@@ -1322,6 +1324,7 @@ WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
 
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
+// 要求:这个线程当前在写队列的前面
 Status DBImpl::MakeRoomForWrite(bool force) {
   mutex_.AssertHeld();
   assert(!writers_.empty());
@@ -1340,6 +1343,9 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // individual write by 1ms to reduce latency variance.  Also,
       // this delay hands over some CPU to the compaction thread in
       // case it is sharing the same core as the writer.
+      // 我们正在接近达到L0文件数量的硬限制。当我们达到硬限制时，不要将单个写入延迟几秒钟，
+      // 而是开始将每个写入延迟1ms，以减少延迟差异。此外，如果压缩线程与写入线程共享同一个内核，
+      // 则此延迟将一些CPU交给压缩线程。
       mutex_.Unlock();
       env_->SleepForMicroseconds(1000);
       allow_delay = false;  // Do not delay a single write more than once
@@ -1359,12 +1365,14 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       background_work_finished_signal_.Wait();
     } else {
       // Attempt to switch to a new memtable and trigger compaction of old
+      // 尝试切换到新的memtable并触发旧memtable的压缩 // 说明日志文件达到了预定大小时(默认是4MB)
       assert(versions_->PrevLogNumber() == 0);
       uint64_t new_log_number = versions_->NewFileNumber();
       WritableFile* lfile = nullptr;
       s = env_->NewWritableFile(LogFileName(dbname_, new_log_number), &lfile);
       if (!s.ok()) {
         // Avoid chewing through file number space in a tight loop.
+        // 避免在紧凑的循环中咀嚼文件编号空间。
         versions_->ReuseFileNumber(new_log_number);
         break;
       }
@@ -1380,6 +1388,9 @@ Status DBImpl::MakeRoomForWrite(bool force) {
         // We could perhaps attempt to save the memtable corresponding
         // to log file and suppress the error if that works, but that
         // would add more complexity in a critical code path.
+        // 我们可能丢失了一些写入前一个日志文件的数据。无论如何，切换到新的日志文件，
+        // 但将其记录为后台错误，以便我们不再尝试任何写操作。我们也许可以尝试保存对应于日志文件的memtable，
+        // 如果可以的话，可以抑制错误，但是这会在关键代码路径中增加更多的复杂性。
         RecordBackgroundError(s);
       }
       delete logfile_;
