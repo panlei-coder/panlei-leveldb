@@ -59,6 +59,7 @@ bool Reader::SkipToInitialBlock() {
   return true;
 }
 
+// 依次解析每一条记录
 bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   if (last_record_offset_ < initial_offset_) {
     if (!SkipToInitialBlock()) {
