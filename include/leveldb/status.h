@@ -20,16 +20,20 @@
 #include "leveldb/slice.h"
 
 namespace leveldb {
-
+/*
+用作函数返回值
+*/
 class LEVELDB_EXPORT Status {
  public:
   // Create a success status.
   Status() noexcept : state_(nullptr) {}
   ~Status() { delete[] state_; }
 
+  // 拷贝构造与拷贝赋值
   Status(const Status& rhs);
   Status& operator=(const Status& rhs);
 
+  // 移动构造与移动赋值
   Status(Status&& rhs) noexcept : state_(rhs.state_) { rhs.state_ = nullptr; }
   Status& operator=(Status&& rhs) noexcept;
 
@@ -77,12 +81,12 @@ class LEVELDB_EXPORT Status {
 
  private:
   enum Code {
-    kOk = 0,
-    kNotFound = 1,
-    kCorruption = 2,
-    kNotSupported = 3,
-    kInvalidArgument = 4,
-    kIOError = 5
+    kOk = 0, // 正常操作
+    kNotFound = 1, // 没有找到相关项 
+    kCorruption = 2, // 数据异常崩溃
+    kNotSupported = 3, // 不支持
+    kInvalidArgument = 4, // 非法参数
+    kIOError = 5 // 操作错误
   };
 
   Code code() const {
@@ -97,7 +101,10 @@ class LEVELDB_EXPORT Status {
   //    state_[0..3] == length of message
   //    state_[4]    == code
   //    state_[5..]  == message
-  const char* state_;
+  // 包含了所有状态信息,包括状态码与具体描述,都保存在这里
+  // (1)当状态为OK时,state_为NULL,说明一切操作都正常
+  // (2)否则,state为一个char数组,具体信息如上
+  const char* state_;  
 };
 
 inline Status::Status(const Status& rhs) {

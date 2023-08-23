@@ -138,6 +138,7 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
 // A comparator for internal keys that uses a specified comparator for
 // the user key portion and breaks ties by decreasing sequence number.
 // internal key的比较器，使用指定的比较器对user key部分进行比较，并通过减少序列号来打破连接。
+// 主要使用在memtable中
 class InternalKeyComparator : public Comparator {
  private:
   const Comparator* user_comparator_; // 用户键值的比较变量
