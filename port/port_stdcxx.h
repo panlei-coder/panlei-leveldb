@@ -77,7 +77,7 @@ class CondVar {
   void Wait() {
     std::unique_lock<std::mutex> lock(mu_->mu_, std::adopt_lock);
     cv_.wait(lock);
-    lock.release();
+    lock.release(); // TODO 多余的操作 ???
   }
   void Signal() { cv_.notify_one(); }
   void SignalAll() { cv_.notify_all(); }
@@ -87,6 +87,8 @@ class CondVar {
   Mutex* const mu_;
 };
 
+// 将参数input指针指向的数据(参数length表明待压缩数据的长度)进行snappy压缩并且将压缩
+// 内容放到参数output中,如果不支持snappy压缩则返回false
 inline bool Snappy_Compress(const char* input, size_t length,
                             std::string* output) {
 #if HAVE_SNAPPY
@@ -105,6 +107,8 @@ inline bool Snappy_Compress(const char* input, size_t length,
   return false;
 }
 
+// 计算参数input指针指向的数据(参数input_length表明待解压缩数据的长度)进行snappy解压缩后的数据长度,
+// 并将其存储到参数result中,如果无法按照snappy解压缩,则返回false
 inline bool Snappy_GetUncompressedLength(const char* input, size_t length,
                                          size_t* result) {
 #if HAVE_SNAPPY
@@ -118,6 +122,8 @@ inline bool Snappy_GetUncompressedLength(const char* input, size_t length,
 #endif  // HAVE_SNAPPY
 }
 
+// 将参数input_data指针指向的数据(参数input_length表明待解压缩数据的长度)进行snappy解压缩,并且将解压缩内容放到
+// 参数output中,如果无法进行snappy解压缩,则返回false
 inline bool Snappy_Uncompress(const char* input, size_t length, char* output) {
 #if HAVE_SNAPPY
   return snappy::RawUncompress(input, length, output);
@@ -198,6 +204,7 @@ inline bool Zstd_Uncompress(const char* input, size_t length, char* output) {
 #endif  // HAVE_ZSTD
 }
 
+// 获取堆内存快照
 inline bool GetHeapProfile(void (*func)(void*, const char*, int), void* arg) {
   // Silence compiler warnings about unused arguments.
   (void)func;
@@ -205,6 +212,7 @@ inline bool GetHeapProfile(void (*func)(void*, const char*, int), void* arg) {
   return false;
 }
 
+// 实现加速CRC校验
 inline uint32_t AcceleratedCRC32C(uint32_t crc, const char* buf, size_t size) {
 #if HAVE_CRC32C
   return ::crc32c::Extend(crc, reinterpret_cast<const uint8_t*>(buf), size);

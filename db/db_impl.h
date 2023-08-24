@@ -26,6 +26,11 @@ class Version;
 class VersionEdit;
 class VersionSet;
 
+/*
+DB API:主要用于封装一些供客户端应用进行调用的接口,即头文件中的相关API函数接口,
+客户端应用可以通过这些接口实现数据引擎的各种操作
+*/
+
 class DBImpl : public DB {
  public:
   DBImpl(const Options& options, const std::string& dbname);
