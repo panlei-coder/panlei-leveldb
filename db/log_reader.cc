@@ -35,7 +35,7 @@ Reader::~Reader() { delete[] backing_store_; }
 // 跳到initial_offset_位置所在块的开头
 bool Reader::SkipToInitialBlock() {
   const size_t offset_in_block = initial_offset_ % kBlockSize; // 在某个具体块中的偏移量
-  uint64_t block_start_location = initial_offset_ - offset_in_block; // 开始的位置
+  uint64_t block_start_location = initial_offset_ - offset_in_block; // 该具体块的开始位置(即块的开头)
 
   // Don't search a block if we'd be in the trailer
   // 如果在块中的偏移量是块的倒数6个字节内,则直接跳过这部分,因为它是被"0x00"填充的
@@ -58,7 +58,12 @@ bool Reader::SkipToInitialBlock() {
 
   return true;
 }
-
+/* 
+注意:读取Log文件时可以从指定偏移量开始,此种情况需要先从文件中偏移一定量的块,然后再开始读。
+但是如果初始读到的类型为kMiddleType或者是kLastType,则需要忽略并且继续偏移。
+但实际上它是先定位到指定偏移量所在的块的开头位置,因为块开头的位置一定能够保证能够读到一条完整的记录,
+然后依次读取每条记录,如果读取的记录开始偏移量小于指定偏移量,则认为是一条BadRecord,然后继续向后遍历。
+*/
 // 依次解析每一条记录
 bool Reader::ReadRecord(Slice* record, std::string* scratch) {
   if (last_record_offset_ < initial_offset_) {

@@ -14,7 +14,7 @@ namespace leveldb {
 static Slice GetLengthPrefixedSlice(const char* data) {
   uint32_t len;
   const char* p = data;
-  p = GetVarint32Ptr(p, p + 5, &len);  // +5: we assume "p" is not corrupted
+  p = GetVarint32Ptr(p, p + 5, &len);  // +5: we assume "p" is not corrupted(假设p没有损坏)
   return Slice(p, len);
 }
 
