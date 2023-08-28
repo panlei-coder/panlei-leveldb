@@ -19,6 +19,10 @@
 
 namespace leveldb {
 
+/*
+Fixed是针对定长数据类型的编码和解码，varint是针对变长数据类型的编码和解码，LevelDB默认采用是小端字节序编码的
+*/
+
 // Standard Put... routines append to a string
 void PutFixed32(std::string* dst, uint32_t value);
 void PutFixed64(std::string* dst, uint64_t value);
@@ -28,6 +32,7 @@ void PutLengthPrefixedSlice(std::string* dst, const Slice& value);
 
 // Standard Get... routines parse a value from the beginning of a Slice
 // and advance the slice past the parsed value.
+// 标准得到……例程从切片的开头解析一个值，并将切片向前推进到已解析的值之上。
 bool GetVarint32(Slice* input, uint32_t* value);
 bool GetVarint64(Slice* input, uint64_t* value);
 bool GetLengthPrefixedSlice(Slice* input, Slice* result);
@@ -103,13 +108,14 @@ inline uint64_t DecodeFixed64(const char* ptr) {
 }
 
 // Internal routine for use by fallback path of GetVarint32Ptr
+//  GetVarint32Ptr的回退路径使用的内部例程
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value);
 inline const char* GetVarint32Ptr(const char* p, const char* limit,
                                   uint32_t* value) {
   if (p < limit) {
     uint32_t result = *(reinterpret_cast<const uint8_t*>(p));
-    if ((result & 128) == 0) {
+    if ((result & 128) == 0) { // 如果result的值是小于128的，那么就将其赋值给value中
       *value = result;
       return p + 1;
     }
