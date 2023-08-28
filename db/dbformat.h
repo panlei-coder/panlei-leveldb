@@ -22,6 +22,8 @@ namespace leveldb {
 /*
 key_length(varint32)|user_key(blob)|sequence(7B)|type(1B)|value_length(varint32)|value(blob)
 
+key_length等于user_key长度加上额外的8字节（sequence(7B)|type(1B)），value_length则记录的是value的长度
+
 start_**************kstart_******************************end_*******************************
 ********************|<----------internal key------------>|**********************************
 ********************|<--user key-->|*********************|**********************************
