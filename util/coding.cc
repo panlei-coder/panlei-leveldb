@@ -69,6 +69,7 @@ void PutVarint64(std::string* dst, uint64_t v) {
   dst->append(buf, ptr - buf);
 }
 
+// 存放切片的话，相当于是想放的是slice的长度，紧接着才是slice
 void PutLengthPrefixedSlice(std::string* dst, const Slice& value) {
   PutVarint32(dst, value.size());
   dst->append(value.data(), value.size());
@@ -83,6 +84,7 @@ int VarintLength(uint64_t v) {
   return len;
 }
 
+// 32位数据变长解码
 const char* GetVarint32PtrFallback(const char* p, const char* limit,
                                    uint32_t* value) {
   uint32_t result = 0;
@@ -142,11 +144,12 @@ bool GetVarint64(Slice* input, uint64_t* value) {
   }
 }
 
+// 先获取slice的长度，然后根据获取的长度值获取slice
 bool GetLengthPrefixedSlice(Slice* input, Slice* result) {
   uint32_t len;
   if (GetVarint32(input, &len) && input->size() >= len) {
     *result = Slice(input->data(), len);
-    input->remove_prefix(len);
+    input->remove_prefix(len); // 将获取完的slice从input中移除掉，相当于是往后挪动
     return true;
   } else {
     return false;
