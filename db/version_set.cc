@@ -21,12 +21,14 @@
 
 namespace leveldb {
 
+// 获取一个文件最大大小，这个大小是从Option实例中获取到的。
 static size_t TargetFileSize(const Options* options) {
   return options->max_file_size;
 }
 
 // Maximum bytes of overlaps in grandparent (i.e., level+2) before we
 // stop building a single file in a level->level+1 compaction.
+// 计算level+2层级和此次进行compact的key值范围重叠的最大字节数。
 static int64_t MaxGrandParentOverlapBytes(const Options* options) {
   return 10 * TargetFileSize(options);
 }
@@ -34,15 +36,19 @@ static int64_t MaxGrandParentOverlapBytes(const Options* options) {
 // Maximum number of bytes in all compacted files.  We avoid expanding
 // the lower level file set of a compaction if it would make the
 // total compaction cover more than this many bytes.
+// 所有压缩文件中的最大字节数。如果压缩的低级别文件集会使总压缩覆盖的字节数超过这么多，我们就避免扩展它。
 static int64_t ExpandedCompactionByteSizeLimit(const Options* options) {
   return 25 * TargetFileSize(options);
 }
 
+// 计算每个层级最大可以有的字节数
 static double MaxBytesForLevel(const Options* options, int level) {
   // Note: the result for level zero is not really used since we set
   // the level-0 compaction threshold based on number of files.
 
   // Result for both level-0 and level-1
+  // 注意:level-0的结果并没有真正使用，因为我们根据文件数量设置了level-0的压缩阈值。
+  // 返回level-0和level-1的结果
   double result = 10. * 1048576.0;
   while (level > 1) {
     result *= 10;
@@ -51,11 +57,13 @@ static double MaxBytesForLevel(const Options* options, int level) {
   return result;
 }
 
+// 计算层级中每个文件的最大大小（每个层级包含多个文件）
 static uint64_t MaxFileSizeForLevel(const Options* options, int level) {
   // We could vary per level to reduce number of files?
   return TargetFileSize(options);
 }
 
+// 计算files动态数组中存放的文件元信息对应的文件总大小
 static int64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   int64_t sum = 0;
   for (size_t i = 0; i < files.size(); i++) {
@@ -64,26 +72,50 @@ static int64_t TotalFileSize(const std::vector<FileMetaData*>& files) {
   return sum;
 }
 
+// 析构
 Version::~Version() {
   assert(refs_ == 0);
 
   // Remove from linked list
+  // 从versionSet链表中移除
   prev_->next_ = next_;
   next_->prev_ = prev_;
 
   // Drop references to files
+  // 文件解引用
   for (int level = 0; level < config::kNumLevels; level++) {
     for (size_t i = 0; i < files_[level].size(); i++) {
       FileMetaData* f = files_[level][i];
       assert(f->refs > 0);
       f->refs--;
-      if (f->refs <= 0) {
+      if (f->refs <= 0) { // 如果文件的引用<=0，则将文件删除
         delete f;
       }
     }
   }
 }
 
+/*
+Level-0的文件需要单独处理，因为这个Level的.ldb文件间Key值的范围可能相交，多个.ldb文件都可能包含查找的Key-Value数据。
+这时用线性搜索的方式逐一比对，可能包含Key-Value的多个.ldb文件，按照由新到旧（.ldb 文件 number 越大越新）的顺序在进一步处理。
+其他Level的.ldb文件，Key值的范围彼此独立，最多只有一个.ldb文件包含查找的Key-Value数据。
+这时用二分查找方式查找，加快查找效率。二分查找FindFile()如下，找到key属于哪个SSTable文件中
+
+采用二分查找算法找到所存放的最大key值不小于参数key值的第一个文件元信息对象
+在files数组中的下标。这里的"第一个"的意思就是值在files数组中所有最大key值
+不小于参数key的元素中下标最小的那个。这个查找的结果也不一定就能说明参数key
+一定会落在最终找到的那个文件中。我们知道虽然在一个层级(非0层)中所有文件的
+key是有序的，递增的，但文件和文件之间的key值是不连续的，如下图所示：
+|  files0 |    |  files1    |  | files2   | files3 |
+----------------------------------------------------
+假设上面的图中区间就是对应文件元信息存放的key值范围，从图中可以看到文件
+和文件之间有可能存在部分key空间是不在两个文件中，如果某个key值不小于files2的
+最大key值，而又大于files1的最大key值，那么FindFile()函数返回的文件元信息下标
+就是图中files2对应的下标，但是不能说明参数key就一定会落在files2中，有可能会
+在files1和files2之间那部分的空白key空间中。
+
+即key落在哪个SSTable文件中
+*/
 int FindFile(const InternalKeyComparator& icmp,
              const std::vector<FileMetaData*>& files, const Slice& key) {
   uint32_t left = 0;
@@ -104,6 +136,9 @@ int FindFile(const InternalKeyComparator& icmp,
   return right;
 }
 
+// AfterFile()函数用于判断user_key是不是会落在文件元信息对象f对应的sstable文件后面，
+// 换句话说就是判断user_key是不是比f对应的sstable文件的最大key值还要大，如果是，那么
+// 就返回true;否则，返回false。
 static bool AfterFile(const Comparator* ucmp, const Slice* user_key,
                       const FileMetaData* f) {
   // null user_key occurs before all keys and is therefore never after *f
@@ -111,6 +146,9 @@ static bool AfterFile(const Comparator* ucmp, const Slice* user_key,
           ucmp->Compare(*user_key, f->largest.user_key()) > 0);
 }
 
+// BeforeFile()函数用于判断user_key是不是会落在文件元信息f对应的sstable文件前面，
+// 换句话说就是判断user_key是不是比f对应的sstable文件中的最小key值还要小，如果是，那么
+// 就返回true;否则，返回false。
 static bool BeforeFile(const Comparator* ucmp, const Slice* user_key,
                        const FileMetaData* f) {
   // null user_key occurs after all keys and is therefore never before *f
@@ -118,12 +156,17 @@ static bool BeforeFile(const Comparator* ucmp, const Slice* user_key,
           ucmp->Compare(*user_key, f->smallest.user_key()) < 0);
 }
 
+// SomeFileOverlapsRange()函数用于判断files文件中是否有文件的key值范围
+// 和[*smallest_user_key, *largest_user_key]有重叠，如果有的话，那么就返回
+// true。
 bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            bool disjoint_sorted_files,
                            const std::vector<FileMetaData*>& files,
                            const Slice* smallest_user_key,
                            const Slice* largest_user_key) {
   const Comparator* ucmp = icmp.user_comparator();
+  // disjoint_sorted_files为false的话，需要检查第0层的所有文件。
+	// 而第0层的文件由于互相之间有重叠，所以需要检查所有文件。
   if (!disjoint_sorted_files) {
     // Need to check against all files
     for (size_t i = 0; i < files.size(); i++) {
@@ -139,9 +182,26 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
   }
 
   // Binary search over file list
+  // 因为从第1层开始，每一层的所有sstable文件的key是没有重叠的，所以
+  // 可以用二分法来查找可能和[*smallest_user_key, *largest_user_key]有
+  // 重叠的文件。
   uint32_t index = 0;
   if (smallest_user_key != nullptr) {
     // Find the earliest possible internal key for smallest_user_key
+    // 这里用smallest_user_key通过调用FindFile()到每一层的所有sstable中进行查找，
+    // FindFile()会采用二分查找算法找到所存放的最大key值不小于smallest_user_key的
+    // 第一个文件元信息对象。如果找到了这样的文件元信息对象，说明其对应的文件可能
+    // 会和[*smallest_user_key, *largest_user_key]有重叠，但还需要进一步判断，即通过
+    // 判断largest_user_key是否比该文件存放的最小key值还小，如果小的话，说明该文件
+    // 其实和[*smallest_user_key, *largest_user_key]并没有重叠;如果大的话，说明
+    // 该文件和[*smallest_user_key, *largest_user_key]是有重叠部分的。举例如下：
+    //
+    // |  files0 |    |  files1    |  | files2   | files3 |
+    // ----------------------------------------------------
+    // 假设通过FindFile()找到的文件元信息对象是files2的，那么[*smallest_user_key,
+    // *largest_user_key]范围此时可能在(files1.max_key, files2.max_key]之间，所以
+    // 需要进一步看是否[*smallest_user_key, *largest_user_key]会落在(files1.max_key,
+    // files2.min_key)之间，如果是的话，说明其实并没有重叠。
     InternalKey small_key(*smallest_user_key, kMaxSequenceNumber,
                           kValueTypeForSeek);
     index = FindFile(icmp, files, small_key.Encode());
@@ -152,6 +212,9 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
     return false;
   }
 
+  // 注意这里还需要判断最大值是否小于files[index]的最小值，
+  // 因为files[index-1].largest <*smallest_user_key <= files[index].largest，
+  // 并不能满足[*smallest_user_key, *largest_user_key]与files[index]有重叠
   return !BeforeFile(ucmp, largest_user_key, files[index]);
 }
 
@@ -160,6 +223,9 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
 // is the largest key that occurs in the file, and value() is an
 // 16-byte value containing the file number and file size, both
 // encoded using EncodeFixed64.
+// Version::LevelFileNumIterator类是一个迭代器的实现类，用于迭代一个
+// 存放这文件元信息对象的动态数组，在实际使用的时候通常用于迭代某个
+// level中的所有sstable对应的文件元信息对象。
 class Version::LevelFileNumIterator : public Iterator {
  public:
   LevelFileNumIterator(const InternalKeyComparator& icmp,
@@ -167,17 +233,33 @@ class Version::LevelFileNumIterator : public Iterator {
       : icmp_(icmp), flist_(flist), index_(flist->size()) {  // Marks as invalid
   }
   bool Valid() const override { return index_ < flist_->size(); }
+
+  // Seek()接口用于使迭代器指向所存放的最大key值大于等于target的
+	// 第一个文件元信息对象，这里的"第一个"的意思就是值在files数组中
+	// 所有最大key值不小于target的元素中下标最小的那个。
   void Seek(const Slice& target) override {
     index_ = FindFile(icmp_, *flist_, target);
   }
+
+  // SeekToFirst()使迭代器指向flist_数组中的第一个文件元信息对象。
   void SeekToFirst() override { index_ = 0; }
+
+  // SeekToLast()使迭代器指向flist_数组中的最后一个文件元信息对象。
   void SeekToLast() override {
     index_ = flist_->empty() ? 0 : flist_->size() - 1;
   }
+
+  // Next()使迭代器指向flist_数组中的下一个文件元信息对象，具体做法
+	// 就是将数组的索引加1.
   void Next() override {
     assert(Valid());
     index_++;
   }
+
+  // Prev()使迭代器指向flist_数组中的前一个文件元信息对象，具体做法就是
+	// 将数组索引减1.如果在减1之前就已经指向第一个文件元信息对象的话，那么
+	// 执行Prev()就应该是一个无效的迭代器了，所以这里将索引设置成flist_->size()。
+	// 因为索引的有效范围是[0, flist_->size() -1]。
   void Prev() override {
     assert(Valid());
     if (index_ == 0) {
@@ -186,39 +268,59 @@ class Version::LevelFileNumIterator : public Iterator {
       index_--;
     }
   }
+
+  // key()方法用于获取迭代器指向的文件元信息对象中存放的最大key值。
   Slice key() const override {
     assert(Valid());
     return (*flist_)[index_]->largest.Encode();
   }
+
+  // value()方法用于获取迭代器指向的文件元信息对象中存放的FileNumber和
+	// file size，并编码在一个16字节的字符数组中
   Slice value() const override {
     assert(Valid());
     EncodeFixed64(value_buf_, (*flist_)[index_]->number);
     EncodeFixed64(value_buf_ + 8, (*flist_)[index_]->file_size);
     return Slice(value_buf_, sizeof(value_buf_));
   }
+
+  // Status()方法用于获取迭代器当前的状态，这里返回的是OK状态。
   Status status() const override { return Status::OK(); }
 
  private:
-  const InternalKeyComparator icmp_;
-  const std::vector<FileMetaData*>* const flist_;
-  uint32_t index_;
+  const InternalKeyComparator icmp_; // InternalKey的比较器
+  const std::vector<FileMetaData*>* const flist_; // 存放文件元信息对象的动态数组
+  uint32_t index_; // 存放文件元信息的动态数组的索引
 
   // Backing store for value().  Holds the file number and size.
-  mutable char value_buf_[16];
+  mutable char value_buf_[16]; // 用于存放获取SSTable文件中的key-value信息，其实这个迭代器本身也是一个二级迭代器
 };
 
+// GetFileIterator()函数用于获取某个指定sstable文件的迭代器，这个迭代器
+// 可以用于获取sstable文件中的key-value信息，其实这个迭代器本身也是一个
+// 二级迭代器。
+// 迭代某个具体的SSTable文件
 static Iterator* GetFileIterator(void* arg, const ReadOptions& options,
                                  const Slice& file_value) {
+  // arg参数存放的是上层调用者传入的参数，在这里是一个TableCache类实例，
+	// 可以参考下面的Version::NewConcatentingIterator()方法。
   TableCache* cache = reinterpret_cast<TableCache*>(arg);
-  if (file_value.size() != 16) {
+  if (file_value.size() != 16) { 
     return NewErrorIterator(
         Status::Corruption("FileReader invoked with unexpected value"));
   } else {
+    // file_value中存放了目标sstable文件的FileNumber和file size，这两个信息
+		// 在LevelFileNumberIterator迭代器的value()方法中可以获取到。然后根据
+		// 这两个信息可以获取到TableCache类实例的迭代器
     return cache->NewIterator(options, DecodeFixed64(file_value.data()),
                               DecodeFixed64(file_value.data() + 8));
   }
 }
 
+// NewConcatenatingIterator()方法用于获取一个二级迭代器，这个二级迭代器可以用于
+// 迭代器某一个层级(level>0)中的所有sstable，并从中获取到key-value信息。当然key需要
+// 由上层调用者传入，否则内部也不知道上层调用者需要Get什么key的value。
+// LevelFileNumIterator迭代指定level的所有SSTable
 Iterator* Version::NewConcatenatingIterator(const ReadOptions& options,
                                             int level) const {
   return NewTwoLevelIterator(
@@ -226,9 +328,16 @@ Iterator* Version::NewConcatenatingIterator(const ReadOptions& options,
       vset_->table_cache_, options);
 }
 
+// AddIterators()方法用于某个版本(Version)中所有sstable的迭代器，这样就可以
+// 通过获取到的迭代器数组依次获取这个版本中的key-value信息。我们知道，level0
+// 中的sstable之间可能存在key重叠的情况，所以对level0中的所有sstable文件作为
+// 独立个体分别创建一个迭代器。而其余level在同level的sstable文件之间是不存在
+// key重叠的，所以可以通过NewConcatenatingIterator来创建一个对于整个level的
+// 迭代器。
 void Version::AddIterators(const ReadOptions& options,
                            std::vector<Iterator*>* iters) {
   // Merge all level zero files together since they may overlap
+  // 合并所有零级文件，因为它们可能重叠
   for (size_t i = 0; i < files_[0].size(); i++) {
     iters->push_back(vset_->table_cache_->NewIterator(
         options, files_[0][i]->number, files_[0][i]->file_size));
@@ -237,6 +346,7 @@ void Version::AddIterators(const ReadOptions& options,
   // For levels > 0, we can use a concatenating iterator that sequentially
   // walks through the non-overlapping files in the level, opening them
   // lazily.
+  // 对于levels > 0，我们可以使用串联迭代器，顺序遍历level中不重叠的文件，惰性地打开它们。
   for (int level = 1; level < config::kNumLevels; level++) {
     if (!files_[level].empty()) {
       iters->push_back(NewConcatenatingIterator(options, level));
@@ -246,12 +356,15 @@ void Version::AddIterators(const ReadOptions& options,
 
 // Callback from TableCache::Get()
 namespace {
+// SaverState枚举用来标识查询key的结果状态。
 enum SaverState {
-  kNotFound,
-  kFound,
-  kDeleted,
-  kCorrupt,
+  kNotFound, // 没找到
+  kFound, // 找到了
+  kDeleted, // 删除了
+  kCorrupt, // 发生了异常了
 };
+
+// struct Saver结构体用来保存user_key对应的value信息。
 struct Saver {
   SaverState state;
   const Comparator* ucmp;
@@ -259,12 +372,17 @@ struct Saver {
   std::string* value;
 };
 }  // namespace
+
+// SaveValue()函数一般用作TableCache::Get()方法的最后一个参数，用于保存
+// 从sstable中查找user_key的结果。
 static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
-  Saver* s = reinterpret_cast<Saver*>(arg);
+  Saver* s = reinterpret_cast<Saver*>(arg); // 结果最终保存在arg中
   ParsedInternalKey parsed_key;
   if (!ParseInternalKey(ikey, &parsed_key)) {
     s->state = kCorrupt;
   } else {
+    // 如果parsed_key.user_key等于s->user_key，说明找到了这个key记录
+  	// 然后根据parsed_key.type判断值是否有效，有效的话，就保存到s->value中。
     if (s->ucmp->Compare(parsed_key.user_key, s->user_key) == 0) {
       s->state = (parsed_key.type == kTypeValue) ? kFound : kDeleted;
       if (s->state == kFound) {
@@ -274,15 +392,23 @@ static void SaveValue(void* arg, const Slice& ikey, const Slice& v) {
   }
 }
 
+// 比较两文件的编号哪个更新
 static bool NewestFirst(FileMetaData* a, FileMetaData* b) {
   return a->number > b->number;
 }
 
+// ForEachOverlapping()方法用于对user_key所落在的sstable文件对应的文件元信息对象
+// 执行一个func操作，并根据函数func的返回值判断是否需要对user_key所落在的其他
+// 文件元信息对象执行相同的操作，如果不需要，则直接返回。
 void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                                  bool (*func)(void*, int, FileMetaData*)) {
   const Comparator* ucmp = vset_->icmp_.user_comparator();
 
   // Search level-0 in order from newest to oldest.
+  // 首先是从0层(level 0)开始，由于level 0中的sstable文件之间可能存在key重叠，
+  // 所以在处理level 0的时候需要遍历该层中的所有文件，将包含了user_key的所有
+  // sstable文件对应的文件元信息对象收集起来。然后对于目标集合，依次调用func
+  // 并根据func的返回值判断是否需要返回。
   std::vector<FileMetaData*> tmp;
   tmp.reserve(files_[0].size());
   for (uint32_t i = 0; i < files_[0].size(); i++) {
@@ -292,6 +418,9 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
       tmp.push_back(f);
     }
   }
+
+  // 不为空，则对这些file先按照文件编号从大到小进行排序（编号越大，说明文件越新）
+  // 排序后依次执行func函数，如果返回值为false，直接结束
   if (!tmp.empty()) {
     std::sort(tmp.begin(), tmp.end(), NewestFirst);
     for (uint32_t i = 0; i < tmp.size(); i++) {
@@ -302,6 +431,12 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   }
 
   // Search other levels.
+  // 如果在level 0中没有包含了user_key的sstable，或者对于找到的满足条件的
+  // sstable文件，func返回值并没有说要提前返回，那么就会继续搜寻更高层的
+  // sstable文件，由于更高层的sstable文件同层级之间不存在key重叠，所以
+  // 一个层级如果存在包含了user_key的文件的话，那么这个文件也是唯一的。
+  // 那么就对这个文件对应的文件元信息对象执行func操作，并根据返回值判断
+  // 是否需要从更高层中继续搜寻。以此类推。
   for (int level = 1; level < config::kNumLevels; level++) {
     size_t num_files = files_[level].size();
     if (num_files == 0) continue;
@@ -321,26 +456,37 @@ void Version::ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
   }
 }
 
+// Get()方法用于从当前版本中获取key值k对应的value值，并设置访问统计。
+// 查找时逐级搜索，如果在较低Level查找到，则以后的Level数据无关紧要，因为低Level的数据是最新的数据。
 Status Version::Get(const ReadOptions& options, const LookupKey& k,
                     std::string* value, GetStats* stats) {
+  // 初始化访问对象
   stats->seek_file = nullptr;
   stats->seek_file_level = -1;
 
+  
   struct State {
-    Saver saver;
-    GetStats* stats;
-    const ReadOptions* options;
-    Slice ikey;
-    FileMetaData* last_file_read;
-    int last_file_read_level;
+    Saver saver; // 用于保存找到指定的key-value
+    GetStats* stats; // 获取到文件的状态信息
+    const ReadOptions* options; // 读取时的相关配置信息
+    Slice ikey; // InternalKey
+    FileMetaData* last_file_read; // 上一次读取的文件元信息
+    int last_file_read_level; // 上一次读取的文件所处的level
 
     VersionSet* vset;
-    Status s;
-    bool found;
+    Status s; 
+    bool found; // 标记是否找到了指定的key
 
+    // 在找到的SSTable文件中匹配指定的key（arg）
     static bool Match(void* arg, int level, FileMetaData* f) {
       State* state = reinterpret_cast<State*>(arg);
 
+      // 如果last_file_read不为NULL，说明之前已经搜寻过了一个或者多个sstable文件，
+			// 但是都没有找到符合条件的key-value记录。如果stats->seek_file等于NULL,说明
+			// 在之前的搜寻过程中并没有设置过访问统计。这两个条件结合在一起是为了约束
+			// 这样的一个条件，即对于本次的读操作(Get)，已经执行了多次的查询，即搜寻了
+			// 多个sstable文件，在这样的情况下，需要保存本次的读操作中被查询的第一个文件
+			// 及其所在的level。
       if (state->stats->seek_file == nullptr &&
           state->last_file_read != nullptr) {
         // We have had more than one seek for this read.  Charge the 1st file.
@@ -348,9 +494,14 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
         state->stats->seek_file_level = state->last_file_read_level;
       }
 
+      // 更新state的last_file_read和last_file_read_level
       state->last_file_read = f;
       state->last_file_read_level = level;
 
+      // 调用TableCache类实例的Get()方法执行查询动作，如果找到了对应的key-value
+			// 记录，那么就可以直接返回了。对于level 0来说，因为所有符合条件的sstable
+			// 文件已经按照FileNumber进行排序，所以如果在FileNumber大(即新的)sstable
+			// 文件中找到了记录，那么就不再从更旧的sstable文件中查找了，直接返回。
       state->s = state->vset->table_cache_->Get(*state->options, f->number,
                                                 f->file_size, state->ikey,
                                                 &state->saver, SaveValue);
@@ -358,6 +509,8 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
         state->found = true;
         return false;
       }
+
+      // 判断是否找到了指定的key-value
       switch (state->saver.state) {
         case kNotFound:
           return true;  // Keep searching in other files
@@ -375,6 +528,7 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
 
       // Not reached. Added to avoid false compilation warnings of
       // "control reaches end of non-void function".
+      // 没有达到。添加以避免控制到达非空函数结束时的错误编译警告。
       return false;
     }
   };
@@ -399,10 +553,14 @@ Status Version::Get(const ReadOptions& options, const LookupKey& k,
   return state.found ? state.s : Status::NotFound(Slice());
 }
 
+// UpdateStats()方法用于根据访问统计判断是否需要更新下一次compact的文件和level。
 bool Version::UpdateStats(const GetStats& stats) {
   FileMetaData* f = stats.seek_file;
   if (f != nullptr) {
-    f->allowed_seeks--;
+    f->allowed_seeks--;// f允许在进行compact前最多被访问的次数递减一次。
+    // 如果f允许在进行compact前最多被访问的次数小于等于0，并且之前没有设置
+    // 下一次compact的文件的话，那么就将f设置为下次进行compact的文件，并将
+    // 该文件所在的level设置为下次进行compact的level。
     if (f->allowed_seeks <= 0 && file_to_compact_ == nullptr) {
       file_to_compact_ = f;
       file_to_compact_level_ = stats.seek_file_level;
@@ -412,16 +570,29 @@ bool Version::UpdateStats(const GetStats& stats) {
   return false;
 }
 
+// 
 bool Version::RecordReadSample(Slice internal_key) {
+  // 调用ParseInternalKey()从internal key中解析出user key、sequence number和type，
+	// 并存放到ParsedInternalKey对象ikey中。
   ParsedInternalKey ikey;
   if (!ParseInternalKey(internal_key, &ikey)) {
     return false;
   }
 
+  // struct State是一个统计类，通过函数Match来对匹配的文件元信息对象做一些访问统计。
+	// 这里的说的匹配可以是对于某个key来说，如果某个sstable包含了这个key，那么我们
+	// 就说匹配了。
   struct State {
-    GetStats stats;  // Holds first matching file
-    int matches;
+    GetStats stats;  // Holds first matching file 记录第一个匹配的文件信息
+    int matches; // 统计匹配对象的个数
 
+    // Match()方法用于对匹配的文件元信息对象做进一步处理，包括：
+		// 1. 统计匹配的文件元信息对象个数。
+		// 2. 保存第一个匹配的文件元信息对象及其对应的sstable文件所在的level。
+		// 3. 返回匹配的文件元信息对象个数是否小于2的逻辑结果。调用Match()函数
+		//    的地方会根据Match()函数的返回值来判断是否需要对其他匹配的文件元信息
+		//    对象再调用Match()函数做处理，如果已经有两个文件元信息对象已经匹配了，
+		//    那么就不再对其他匹配的文件元信息对象做处理了。
     static bool Match(void* arg, int level, FileMetaData* f) {
       State* state = reinterpret_cast<State*>(arg);
       state->matches++;
@@ -431,18 +602,25 @@ bool Version::RecordReadSample(Slice internal_key) {
         state->stats.seek_file_level = level;
       }
       // We can stop iterating once we have a second match.
+      // 一旦有了第二个匹配，我们就可以停止迭代了。（注意：这里是找到了两个之后才不会继续找）
       return state->matches < 2;
     }
   };
 
   State state;
   state.matches = 0;
+  // ForEachOverlapping()方法用于对user_key所落在的sstable文件对应的文件元信息对象
+	// 执行一个State::Match操作，并根据该函数的返回值判断是否需要对user_key所落在的其他
+	// 文件元信息对象执行相同的操作，如果不需要，则直接返回。
   ForEachOverlapping(ikey.user_key, internal_key, &state, &State::Match);
 
   // Must have at least two matches since we want to merge across
   // files. But what if we have a single file that contains many
   // overwrites and deletions?  Should we have another mechanism for
   // finding such files?
+  // 必须至少有两个匹配项，因为我们要跨文件合并。但是，如果我们有一个包含许多覆盖和删除的单一文件呢
+  // 如果state.matches >= 2，说明对于user_key来说，至少有两个sstable文件包含了这个key
+  // 那么就调用UpdateStats()方法用于根据访问统计判断是否需要更新下一次compact的文件和level
   if (state.matches >= 2) {
     // 1MB cost is about 1 seek (see comment in Builder::Apply).
     return UpdateStats(state.stats);

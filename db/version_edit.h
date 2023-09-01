@@ -14,16 +14,20 @@
 namespace leveldb {
 
 class VersionSet;
-
+/*
+SSTable产生变化的触发条件：
+（1）将Immutable转为SSTable时。
+（2）当后台开始进行Compact时。（一个是level0层超过了指定的文件个数时，另一个是当某个文件被seek的次数达到阈值时,......）
+*/
 struct FileMetaData {
   FileMetaData() : refs(0), allowed_seeks(1 << 30), file_size(0) {}
 
-  int refs;
-  int allowed_seeks;  // Seeks allowed until compaction
-  uint64_t number;
-  uint64_t file_size;    // File size in bytes
-  InternalKey smallest;  // Smallest internal key served by table
-  InternalKey largest;   // Largest internal key served by table
+  int refs; // 当前文件被引用了多少次，同一个SSTable可以在不同version
+  int allowed_seeks;  // Seeks allowed until compaction 文件允许被seek的次数，超过这个次数，就需要把整个文件Compact
+  uint64_t number; // 文件编号
+  uint64_t file_size;    // File size in bytes 文件大小
+  InternalKey smallest;  // Smallest internal key served by table 文件的最小key（包含了序列号）
+  InternalKey largest;   // Largest internal key served by table 文件的最大key（包含了学列号）
 };
 
 class VersionEdit {
@@ -85,20 +89,20 @@ class VersionEdit {
 
   typedef std::set<std::pair<int, uint64_t>> DeletedFileSet;
 
-  std::string comparator_;
-  uint64_t log_number_;
-  uint64_t prev_log_number_;
-  uint64_t next_file_number_;
-  SequenceNumber last_sequence_;
-  bool has_comparator_;
-  bool has_log_number_;
-  bool has_prev_log_number_;
-  bool has_next_file_number_;
-  bool has_last_sequence_;
+  std::string comparator_; // key的比较器名称，db一旦创建，排序的逻辑就必须保持兼容，不可变更
+  uint64_t log_number_;  // 当前使用的日志编号
+  uint64_t prev_log_number_; // 前一个日志编号
+  uint64_t next_file_number_; // 下一个文件编号
+  SequenceNumber last_sequence_; // 最新的键值对序列号
+  bool has_comparator_; // 是否有比较器
+  bool has_log_number_; // 是否有日志编号
+  bool has_prev_log_number_; // 是否有前一个日志编号
+  bool has_next_file_number_; // 是否有下一个文件编号
+  bool has_last_sequence_; // 是否有最新的键值对序列号
 
-  std::vector<std::pair<int, InternalKey>> compact_pointers_;
-  DeletedFileSet deleted_files_;
-  std::vector<std::pair<int, FileMetaData>> new_files_;
+  std::vector<std::pair<int, InternalKey>> compact_pointers_; // 每一层level层的compact pointer
+  DeletedFileSet deleted_files_; // 要删除的SSTable文件
+  std::vector<std::pair<int, FileMetaData>> new_files_; // 要添加的SSTable文件
 };
 
 }  // namespace leveldb

@@ -19,7 +19,8 @@ static const size_t kFilterBase = 1 << kFilterBaseLg; // 2KB
 FilterBlockBuilder::FilterBlockBuilder(const FilterPolicy* policy)
     : policy_(policy) {}
 
-// 每2KB创建一个filter 
+// 每2KB创建一个filter（注意：是一个DataBlock生成一个filter，但是fiter_offset_是每2KB生成一个，
+// 注意while (filter_index > filter_offsets_.size())十个循环）
 void FilterBlockBuilder::StartBlock(uint64_t block_offset) {
   // 判断是否需要创建一个filter
   uint64_t filter_index = (block_offset / kFilterBase);

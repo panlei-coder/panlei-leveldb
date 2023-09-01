@@ -42,6 +42,8 @@ class WritableFile;
 // Return the smallest index i such that files[i]->largest >= key.
 // Return files.size() if there is no such file.
 // REQUIRES: "files" contains a sorted list of non-overlapping files.
+// 返回最小的索引i，使得files[i]->largest >= key，即包含key的SSTable
+// 如果没有这样的文件，返回files.size()。要求:files包含一个有序的非重叠文件列表。
 int FindFile(const InternalKeyComparator& icmp,
              const std::vector<FileMetaData*>& files, const Slice& key);
 
@@ -51,6 +53,9 @@ int FindFile(const InternalKeyComparator& icmp,
 // largest==nullptr represents a key largest than all keys in the DB.
 // REQUIRES: If disjoint_sorted_files, files[] contains disjoint ranges
 //           in sorted order.
+// 如果文件中的某些文件与用户键范围[*smallest,*largest]重叠，则返回true。
+// smallest==nullptr表示一个比DB中所有键都小的键。largest==nullptr表示一个键比DB中所有键都大。
+// 要求:如果disjoint已排序文件，files[]包含已排序的disjoint范围。
 bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
                            bool disjoint_sorted_files,
                            const std::vector<FileMetaData*>& files,
@@ -59,9 +64,9 @@ bool SomeFileOverlapsRange(const InternalKeyComparator& icmp,
 
 class Version {
  public:
-  struct GetStats {
-    FileMetaData* seek_file;
-    int seek_file_level;
+  struct GetStats { // 获取到文件时的状态信息
+    FileMetaData* seek_file; // 文件的元信息
+    int seek_file_level; // 找到该文件时，文件所在的level
   };
 
   // Append to *iters a sequence of iterators that will
@@ -84,6 +89,9 @@ class Version {
   // Samples are taken approximately once every config::kReadBytesPeriod
   // bytes.  Returns true if a new compaction may need to be triggered.
   // REQUIRES: lock is held
+  // 记录在指定的内部键上读取的字节样本。大约每config::kReadBytesPeriod字节采集一次样本。
+  // 如果可能需要触发新的压缩，则返回true。
+  // 要求:锁被持有
   bool RecordReadSample(Slice key);
 
   // Reference count management (so Versions do not disappear out from
@@ -145,23 +153,25 @@ class Version {
   void ForEachOverlapping(Slice user_key, Slice internal_key, void* arg,
                           bool (*func)(void*, int, FileMetaData*));
 
-  VersionSet* vset_;  // VersionSet to which this Version belongs
-  Version* next_;     // Next version in linked list
-  Version* prev_;     // Previous version in linked list
-  int refs_;          // Number of live refs to this version
+  VersionSet* vset_;  // VersionSet to which this Version belongs VersonSet双向链表的一个节点
+  Version* next_;     // Next version in linked list 指向下一个
+  Version* prev_;     // Previous version in linked list  指向前一个
+  int refs_;          // Number of live refs to this version 引用次数
 
   // List of files per level
-  std::vector<FileMetaData*> files_[config::kNumLevels];
+  std::vector<FileMetaData*> files_[config::kNumLevels]; // 当前版本的所有数据
 
   // Next file to compact based on seek stats.
-  FileMetaData* file_to_compact_;
-  int file_to_compact_level_;
+  // 下一个要根据查找状态进行压缩的文件。
+  FileMetaData* file_to_compact_; // 用于seek次数超过阈值之后需要压缩的文件
+  int file_to_compact_level_; // 用于seek次数超过阈值之后需要压缩的文件所在的level
 
   // Level that should be compacted next and its compaction score.
   // Score < 1 means compaction is not strictly needed.  These fields
   // are initialized by Finalize().
-  double compaction_score_;
-  int compaction_level_;
+  // 下一步应压实的级别及其压实评分。Score < 1表示不需要严格压缩。这些字段由Finalize()初始化。
+  double compaction_score_; // 用于检查size超过阈值之后需要压缩的文件
+  int compaction_level_; // 用于检查size超过阈值之后需要压缩的文件所在level
 };
 
 class VersionSet {
@@ -293,26 +303,28 @@ class VersionSet {
 
   void AppendVersion(Version* v);
 
-  Env* const env_;
-  const std::string dbname_;
-  const Options* const options_;
-  TableCache* const table_cache_;
-  const InternalKeyComparator icmp_;
-  uint64_t next_file_number_;
-  uint64_t manifest_file_number_;
-  uint64_t last_sequence_;
-  uint64_t log_number_;
-  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted
+  Env* const env_;  // 文件操作的统一接口
+  const std::string dbname_; // 文件名
+  const Options* const options_; // 相关配置选项
+  TableCache* const table_cache_; // SSTable的缓存管理
+  const InternalKeyComparator icmp_; // internalkey（userkey + sequence）的比较器
+  uint64_t next_file_number_; // 下一个文件编号
+  uint64_t manifest_file_number_; // manifest文件编号
+  uint64_t last_sequence_; // 最新的序列号
+  uint64_t log_number_; // 记录的当前日志编号
+  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted（0或被压缩的memtable的后备存储）前一个日志文件编号
 
   // Opened lazily
-  WritableFile* descriptor_file_;
-  log::Writer* descriptor_log_;
-  Version dummy_versions_;  // Head of circular doubly-linked list of versions.
-  Version* current_;        // == dummy_versions_.prev_
+  WritableFile* descriptor_file_; // 用于写manifest文件
+  log::Writer* descriptor_log_; // 用于写manifest文件，其中log格式和wal格式保持一致
+  Version dummy_versions_;  // Head of circular doubly-linked list of versions. 固定指向双向链表的head，而且其pre指向最新current
+  Version* current_;        // == dummy_versions_.prev_ 指向当前最新版本
 
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
-  std::string compact_pointer_[config::kNumLevels];
+  // 记录每一层在下一次需要压缩的largest key(InternalKey)
+  // 该值取自versionset
+  std::string compact_pointer_[config::kNumLevels]; 
 };
 
 // A Compaction encapsulates information about a compaction.
@@ -363,20 +375,20 @@ class Compaction {
 
   Compaction(const Options* options, int level);
 
-  int level_;
-  uint64_t max_output_file_size_;
-  Version* input_version_;
-  VersionEdit edit_;
+  int level_; // 需要压缩的level
+  uint64_t max_output_file_size_; // 压缩之后最大的文件大小，等于options->max_file_size
+  Version* input_version_; // 当前需要操作的版本
+  VersionEdit edit_; // 版本变化
 
   // Each compaction reads inputs from "level_" and "level_+1"
-  std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs
+  std::vector<FileMetaData*> inputs_[2];  // The two sets of inputs // "level_"和"level_+1"两层需要参与压缩的文件元数据
 
   // State used to check for number of overlapping grandparent files
   // (parent == level_ + 1, grandparent == level_ + 2)
-  std::vector<FileMetaData*> grandparents_;
-  size_t grandparent_index_;  // Index in grandparent_starts_
+  std::vector<FileMetaData*> grandparents_; // grandparent元数据
+  size_t grandparent_index_;  // Index in grandparent_starts_ // grandparent下表索引
   bool seen_key_;             // Some output key has been seen
-  int64_t overlapped_bytes_;  // Bytes of overlap between current output
+  int64_t overlapped_bytes_;  // Bytes of overlap between current output // 当前压缩的文件与grandparent files重叠的字节数
                               // and grandparent files
 
   // State for implementing IsBaseLevelForKey
@@ -385,7 +397,7 @@ class Compaction {
   // is that we are positioned at one of the file ranges for each
   // higher level than the ones involved in this compaction (i.e. for
   // all L >= level_ + 2).
-  size_t level_ptrs_[config::kNumLevels];
+  size_t level_ptrs_[config::kNumLevels]; // 用于记录某个user_key与>=level+2中每一层不重叠的文件个数
 };
 
 }  // namespace leveldb

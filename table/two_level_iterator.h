@@ -20,6 +20,12 @@ struct ReadOptions;
 //
 // Uses a supplied function to convert an index_iter value into
 // an iterator over the contents of the corresponding block.
+/*
+返回一个新的两级迭代器。两级迭代器包含一个索引迭代器，其值指向一个块序列，其中每个块本身是一个键值对序列。
+返回的两级迭代器产生块序列中所有键/值对的连接。获取“index_iter”的所有权，并在不再需要时将其删除。
+使用提供的函数将index_iter值转换为对应块内容的迭代器。
+block_function是构建DataBlock迭代器的指针函数
+*/
 Iterator* NewTwoLevelIterator(
     Iterator* index_iter,
     Iterator* (*block_function)(void* arg, const ReadOptions& options,
