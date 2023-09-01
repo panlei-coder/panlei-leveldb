@@ -154,7 +154,7 @@ void TableBuilder::Add(const Slice& key, const Slice& value) {
 // 将DataBlock写入SSTable文件中，并刷新到磁盘
 void TableBuilder::Flush() {
   Rep* r = rep_;
-  assert(!r->closed); // 必须是还没哟关闭
+  assert(!r->closed); // 必须是还没有关闭
   if (!ok()) return;
   if (r->data_block.empty()) return; // 如果data_block是空的，则直接返回
   assert(!r->pending_index_entry); // pending_index_entry必须为false，即上一个DataBlock的index BlockHandle已经添加到了Index Block中
@@ -170,7 +170,7 @@ void TableBuilder::Flush() {
   }
   // 如果filter_block不为空，则需要将
   if (r->filter_block != nullptr) {
-    r->filter_block->StartBlock(r->offset);
+    r->filter_block->StartBlock(r->offset); // 这是DataBlock在SSTable中的偏移量
   }
 }
 

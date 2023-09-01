@@ -36,6 +36,10 @@ struct Table::Rep {
   Block* index_block; // index block数据
 };
 
+// 打开SSTable时，首先将index block读取出来，
+// 用于后期查询key时，先通过内存中的index block来
+// 判断key在不在这个SSTable，然后再决定是否去读取对应的data block。
+// 这样明显可减少I/O操作。
 Status Table::Open(const Options& options, RandomAccessFile* file,
                    uint64_t size, Table** table) {
   *table = nullptr;
@@ -193,7 +197,8 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   // @todo 没太理解这段内容想要表达的意思 ？？？ 
   if (s.ok()) {
     BlockContents contents;
-    if (block_cache != nullptr) { // 如果缓存块不为空，则使用指定的缓存块
+    if (block_cache != nullptr) { // 如果开启了block_cache，则先去此cache中查找
+	    // key就是id+DataBlock的offset。 注意这里的cache与TableCache不同，TableCache存放的是SSTable
       char cache_key_buffer[16];
       // 获取对应的缓存块
       EncodeFixed64(cache_key_buffer, table->rep_->cache_id);
@@ -237,7 +242,7 @@ Iterator* Table::BlockReader(void* arg, const ReadOptions& options,
   return iter;
 }
 
-// 通过Table类来生成一个迭代器
+// 通过Table类来生成一个二层迭代器
 Iterator* Table::NewIterator(const ReadOptions& options) const {
   return NewTwoLevelIterator(
       // 第一层迭代器，为一个块迭代器

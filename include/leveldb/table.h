@@ -25,7 +25,7 @@ class TableCache;
 // multiple threads without external synchronization.
 // 表是从字符串到字符串的排序映射。表是不可变的和持久的。
 // 一个Table可以在没有外部同步的情况下被多个线程安全地访问。
-class LEVELDB_EXPORT Table {
+class LEVELDB_EXPORT Table { // SSTable
  public:
   // Attempt to open the table that is stored in bytes [0..file_size)
   // of "file", and read the metadata entries necessary to allow

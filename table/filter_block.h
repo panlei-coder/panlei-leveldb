@@ -29,7 +29,7 @@ class FilterPolicy;
 //      (StartBlock AddKey*)* Finish
 // FilterBlockBuilder用于构造特定表的所有过滤器。它生成一个字符串，作为一个特殊的块存储在Table中。
 // 调用FilterBlockBuilder的顺序必须匹配regexp:(StartBlock AddKey*)
-class FilterBlockBuilder {
+class FilterBlockBuilder { // 过滤器的构建
  public:
   explicit FilterBlockBuilder(const FilterPolicy*);
 
@@ -58,7 +58,7 @@ class FilterBlockBuilder {
   std::vector<uint32_t> filter_offsets_;
 };
 
-class FilterBlockReader {
+class FilterBlockReader { // 过滤器的读取
  public:
   // REQUIRES: "contents" and *policy must stay live while *this is live.
   FilterBlockReader(const FilterPolicy* policy, const Slice& contents);

@@ -193,6 +193,10 @@ leveldb 的实现在本质上与单个Bigtabletablet的表示类似（第 5.3 �
 1.Manifest
 MANIFEST 文件列出了组成每个级别的一组排序表、相应的键范围以及其他重要的元数据。每当重新打开数据库时，都会创建一个新的 MANIFEST 文件（文件名中嵌入新编号）。MANIFEST 文件被格式化为日志，并且对服务状态所做的更改（添加或删除文件时）将附加到此日志中。
 
+SSTable 中的某个文件属于特定层级，而且其存储的记录是 key 有序的，那么必然有文件中的最小 key 和最大 key，这是非常重要的信息，LevelDB 应该记下这些信息。manifest 就是干这个的，它记载了 SSTable 各个文件的管理信息，比如属于哪个 level，文件名称叫啥，最小 key 和最大 key 各自是多少。下图是 manifest 所存储内容的示意：
+
+图中只显示了两个文件（manifest 会记载所有 SSTable 文件的这些信息），即 level 0 的 Test1.sst 和 Test2.sst 文件，同时记载了这些文件各自对应的 key 范围，比如 Test1.sst 的 key 范围是 “abc” 到 “hello”，而文件 Test2.sst 的 key 范围是 “bbc” 到 “world”，可以看出两者的 key 范围是有重叠的。
+
 2.Current
 CURRENT 是一个简单的文本文件，其中包含最新的 MANIFEST 文件的名称。
 
