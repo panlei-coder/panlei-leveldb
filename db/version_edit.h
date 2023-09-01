@@ -30,6 +30,9 @@ struct FileMetaData {
   InternalKey largest;   // Largest internal key served by table 文件的最大key（包含了学列号）
 };
 
+// VersionEdit类保存的是一个版本变动的信息，在某个基准版本上面，应用一个或者多个
+// VersionEdit就可以得到新的版本。VersionEdit中存放了基于上一个版本增加的文件信息，
+// 删除的文件信息。
 class VersionEdit {
  public:
   VersionEdit() { Clear(); }
@@ -64,6 +67,9 @@ class VersionEdit {
   // Add the specified file at the specified number.
   // REQUIRES: This version has not been saved (see VersionSet::SaveTo)
   // REQUIRES: "smallest" and "largest" are smallest and largest keys in file
+  // AddFile()方法用于往VersionEdit类实例中添加版本变动需要增加的一个sstable文件，
+  // 其中level是sstable文件所在的层数，file是sstable文件的file number，file_size是
+  // sstable文件的大小，smallest和largest分别是sstable文件中存放的最小和最大的key信息
   void AddFile(int level, uint64_t file, uint64_t file_size,
                const InternalKey& smallest, const InternalKey& largest) {
     FileMetaData f;
@@ -75,6 +81,8 @@ class VersionEdit {
   }
 
   // Delete the specified "file" from the specified "level".
+  // DeleteFile()方法用于往VersionEdit类实例中添加一个版本变动需要被删除的sstable文件，
+  // level是sstable文件所在的层级数，而file则是sstable文件的file number。
   void RemoveFile(int level, uint64_t file) {
     deleted_files_.insert(std::make_pair(level, file));
   }

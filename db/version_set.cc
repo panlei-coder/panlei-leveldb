@@ -570,7 +570,7 @@ bool Version::UpdateStats(const GetStats& stats) {
   return false;
 }
 
-// 
+// 找到包含指定internal_key的至少两个SSTable文件
 bool Version::RecordReadSample(Slice internal_key) {
   // 调用ParseInternalKey()从internal key中解析出user key、sequence number和type，
 	// 并存放到ParsedInternalKey对象ikey中。
@@ -628,8 +628,10 @@ bool Version::RecordReadSample(Slice internal_key) {
   return false;
 }
 
+// 增加计数
 void Version::Ref() { ++refs_; }
 
+//  减少计数，当引用为0时，直接删除当前version对象
 void Version::Unref() {
   assert(this != &vset_->dummy_versions_);
   assert(refs_ >= 1);
@@ -639,30 +641,57 @@ void Version::Unref() {
   }
 }
 
+// SomeFileOverlapsRange()函数用于判断files文件中是否有文件的key值范围
+// 和[*smallest_user_key, *largest_user_key]有重叠，如果有的话，那么就返回
+// true。那么OverlapInLevel()方法的用途就是判断level层所在的sstable文件中
+// 是否有文件的key值范围和[*smallest_user_key, *largest_user_key]有重叠，
+// 如果有的话，就返回true；否则返回false。
 bool Version::OverlapInLevel(int level, const Slice* smallest_user_key,
                              const Slice* largest_user_key) {
   return SomeFileOverlapsRange(vset_->icmp_, (level > 0), files_[level],
                                smallest_user_key, largest_user_key);
 }
 
+// PickLevelForMemTableOutput()方法用于给memtable选择一个合适的level
+// 作为memtable下沉为sstable的目标层数。
 int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
                                         const Slice& largest_user_key) {
   int level = 0;
-  if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) {
+
+  // 首选判断在第0层是否有sstable文件和[smallest_user_key,largest_user_key]
+ // 有重叠，如果有的话，那么就将第0层作为memtable下沉为sstable文件的目标层数。
+ // 如果第0层没有的话，那么选择的依据有两个，假定目前迭代的层数为level(仍从0开始)：
+ // 1. 如果该层的下一层(level + 1)中的sstable文件key值范围有和[smallest_user_key,
+ //    largest_user_key]重叠，那么level层就作为目标层数。
+ // 2. 如果第一个条件没有符合，但是该层的下两层(level + 2)中和[smallest_user_key,
+ //    largest_user_key]key值范围有重叠的sstable文件的总大小大于下两层最大重叠字节数的
+ //    话，那么也将level层作为目标层数。
+ /*
+ @todo 针对第二种情况是基于什么理由这样做呢 ？？？
+1. 大于 level 0的各层文件间是有序的，如果放到对应的层数会导致文件间不严格有序，会影响读取，则不再尝试。
+2. 如果[smallest_user_key,largest_user_key]与下两层level+2的重叠数据很大，那么将其放入到level层，使得其能够与其他SSTable合并了之后再与level+2层合并，减少冗余的存储空间占用，有助于提高整体存储空间的利用。
+3. 最大返回 level 2，这应该是个经验值。
+ */
+ // 上面的处理流程，对于等0层来说，如果该层中有sstable文件的key值范围和目标范围重叠，
+ // 或者该层本身没有sstable文件的key值范围和目标范围重叠，但是下一层或者下两层的sstable
+ // 满足上面的条件，都会将第0层作为目标层数。
+  if (!OverlapInLevel(0, &smallest_user_key, &largest_user_key)) { // 没有重叠
     // Push to next level if there is no overlap in next level,
     // and the #bytes overlapping in the level after that are limited.
+    // 如果下一层没有重叠，就推到下一层
     InternalKey start(smallest_user_key, kMaxSequenceNumber, kValueTypeForSeek);
     InternalKey limit(largest_user_key, 0, static_cast<ValueType>(0));
     std::vector<FileMetaData*> overlaps;
     while (level < config::kMaxMemCompactLevel) {
-      if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) {
+      if (OverlapInLevel(level + 1, &smallest_user_key, &largest_user_key)) { // 下一层有重叠
         break;
       }
-      if (level + 2 < config::kNumLevels) {
+      if (level + 2 < config::kNumLevels) { // 下两层
         // Check that file does not overlap too many grandparent bytes.
+        // 检查文件是否重叠太多的祖父字节
         GetOverlappingInputs(level + 2, &start, &limit, &overlaps);
         const int64_t sum = TotalFileSize(overlaps);
-        if (sum > MaxGrandParentOverlapBytes(vset_->options_)) {
+        if (sum > MaxGrandParentOverlapBytes(vset_->options_)) { // 如果重叠超过了level与level+2层合并时的最大重叠字节数
           break;
         }
       }
@@ -673,6 +702,8 @@ int Version::PickLevelForMemTableOutput(const Slice& smallest_user_key,
 }
 
 // Store in "*inputs" all files in "level" that overlap [begin,end]
+// GetOverlappingInputs()用于将level层的所有和key值范围[begin,end]有
+// 重叠的sstable文件对应的文件元信息对象收集起来存放到inputs数组中。
 void Version::GetOverlappingInputs(int level, const InternalKey* begin,
                                    const InternalKey* end,
                                    std::vector<FileMetaData*>* inputs) {
@@ -687,6 +718,22 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
     user_end = end->user_key();
   }
   const Comparator* user_cmp = vset_->icmp_.user_comparator();
+
+ // 遍历level层的所有sstable文件元信息对象，对于每一个文件元信息对象，
+ // 获取到其中存放的最大和最小key值。如果最大的key值都比begin小，那么
+ // 这个sstable肯定不会和[begin,end]有重叠；如果最小的key值都比end
+ // 大，那么这个sstable肯定不会和[begin,end]有重叠；否则，这个sstable
+ // 文件的key值返回和[begin,end]就会有重叠，保存这个sstable文件对应的
+ // 文件元信息对象。
+ // 对于第0层来说比较特殊，因为第0层的sstable文件的key值范围可能会互相
+ // 重叠，这个时候如果某个sstable的最小key值比begin小的话，那么就用这个
+ // 最小key值作为begin，然后清除已经收集的文件元信息对象，并从该层的第一
+ // 个文件开始重新判断是否和这个新key值范围[begin(new),end]有重叠；如果
+ // 某个sstable文件的最大key值比end大的话，那么就用这个最大key值作为end，
+ // 然后清除已经收集的文件元信息对象，并从该层的第一个文件开始重新判断是否
+ // 和这个新的key值范围有重叠。这样做的结果就是可能有一些和最原始的[begin,end]
+ // 没有重叠的sstable文件对应的文件元信息对象也加入到了数组中。
+
   for (size_t i = 0; i < files_[level].size();) {
     FileMetaData* f = files_[level][i++];
     const Slice file_start = f->smallest.user_key();
@@ -700,6 +747,8 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
       if (level == 0) {
         // Level-0 files may overlap each other.  So check if the newly
         // added file has expanded the range.  If so, restart search.
+        // 因为f文件已经被添加到了有重叠的文件中，而level+0层的SSTable是有重叠的，所以当该SSTable文件被compact之后，
+        // 可能其他与该SSTable有重叠的文件就会被访问到，可能会违反数据一致性的要求，故这里修改begin/end来将它们都添加到有重叠的集合中
         if (begin != nullptr && user_cmp->Compare(file_start, user_begin) < 0) {
           user_begin = file_start;
           inputs->clear();
@@ -715,6 +764,7 @@ void Version::GetOverlappingInputs(int level, const InternalKey* begin,
   }
 }
 
+// DebugString()方法用于打印出Version类实例的信息，用于调试。
 std::string Version::DebugString() const {
   std::string r;
   for (int level = 0; level < config::kNumLevels; level++) {
