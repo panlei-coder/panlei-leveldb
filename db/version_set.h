@@ -322,8 +322,7 @@ class VersionSet {
 
   // Per-level key at which the next compaction at that level should start.
   // Either an empty string, or a valid InternalKey.
-  // 记录每一层在下一次需要压缩的largest key(InternalKey)
-  // 该值取自versionset
+  // 记录每个层级上次Compaction操作的最大值
   std::string compact_pointer_[config::kNumLevels]; 
 };
 
