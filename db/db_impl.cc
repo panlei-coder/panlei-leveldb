@@ -457,7 +457,7 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
       *max_sequence = last_seq;
     }
 
-    if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) {
+    if (mem->ApproximateMemoryUsage() > options_.write_buffer_size) { // 如果mem_大小达到阈值时，转换为SSTable，写入到level 0中
       compactions++;
       *save_manifest = true;
       status = WriteLevel0Table(mem, edit, nullptr);
@@ -507,13 +507,17 @@ Status DBImpl::RecoverLogFile(uint64_t log_number, bool last_log,
   return status;
 }
 
+// WriteLevel0Table()函数将Memtable落地为SSTable
 Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
                                 Version* base) {
-  mutex_.AssertHeld();
+  mutex_.AssertHeld(); // 判断是否上锁，没有则自动上锁
   const uint64_t start_micros = env_->NowMicros();
   FileMetaData meta;
+  // 获取新SSTable的文件名即FileNum
   meta.number = versions_->NewFileNumber();
+  // 保存此File，防止被删除
   pending_outputs_.insert(meta.number);
+  // 对此Memable创建访问的迭代器
   Iterator* iter = mem->NewIterator();
   Log(options_.info_log, "Level-0 table #%llu: started",
       (unsigned long long)meta.number);
@@ -521,6 +525,8 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
   Status s;
   {
     mutex_.Unlock();
+    // 按SSTable格式生存SSTable文件到磁盘，
+    // 并将SSTable文件加入到table_cache_中
     s = BuildTable(dbname_, env_, options_, table_cache_, iter, &meta);
     mutex_.Lock();
   }
@@ -529,6 +535,7 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
       (unsigned long long)meta.number, (unsigned long long)meta.file_size,
       s.ToString().c_str());
   delete iter;
+  // 文件已生存，可删除此记录了
   pending_outputs_.erase(meta.number);
 
   // Note that if file_size is zero, the file has been deleted and
@@ -538,19 +545,29 @@ Status DBImpl::WriteLevel0Table(MemTable* mem, VersionEdit* edit,
     const Slice min_user_key = meta.smallest.user_key();
     const Slice max_user_key = meta.largest.user_key();
     if (base != nullptr) {
+      // 新生存的SSTable文件，不一定都放在level-0层，有可能是level-1或者level-2层，
+      // 但最多是level-2层。此方法就是根据最小和最大key，找到需要放此SSTable的level。
       level = base->PickLevelForMemTableOutput(min_user_key, max_user_key);
     }
+    // 通过VersionEdit记录新增的SSTable，用于后续产生新的Version。
     edit->AddFile(level, meta.number, meta.file_size, meta.smallest,
                   meta.largest);
   }
 
-  CompactionStats stats;
+  CompactionStats stats; 
+  // 记录状态信息
   stats.micros = env_->NowMicros() - start_micros;
   stats.bytes_written = meta.file_size;
   stats_[level].Add(stats);
   return s;
 }
 
+/*
+CompactMemTable()函数将memtable转换为SSTable文件写入到磁盘level 0层中。
+（1）将Immutable落地生成SSTable文件、同时将文件信息放入Table_Cache中；
+（2）生成新的Version文件；
+（3）删除无用文件。
+*/
 void DBImpl::CompactMemTable() {
   mutex_.AssertHeld();
   assert(imm_ != nullptr);
@@ -559,6 +576,7 @@ void DBImpl::CompactMemTable() {
   VersionEdit edit;
   Version* base = versions_->current();
   base->Ref();
+  // 1、落地生成新的SSTable文件。
   Status s = WriteLevel0Table(imm_, &edit, base);
   base->Unref();
 
@@ -568,6 +586,11 @@ void DBImpl::CompactMemTable() {
 
   // Replace immutable memtable with the generated Table
   if (s.ok()) {
+    // 2、记录VersionEdit信息，
+    // 通过LogAndApply()生存新的Version。
+    // LogAndApply()还做了以下事情：
+    // 1）记录了compaction_score_最高的那一层的level及score。
+    // 2）检测更新manifest和Current文件。
     edit.SetPrevLogNumber(0);
     edit.SetLogNumber(logfile_number_);  // Earlier logs no longer needed
     s = versions_->LogAndApply(&edit, &mutex_);
@@ -578,6 +601,8 @@ void DBImpl::CompactMemTable() {
     imm_->Unref();
     imm_ = nullptr;
     has_imm_.store(false, std::memory_order_release);
+    // 3、因为进行了Compact，此处主要涉及到logFile、Manifest、Current，
+    // 所以调用此方法，对已经无用的文件进行删除。
     RemoveObsoleteFiles();
   } else {
     RecordBackgroundError(s);
@@ -1231,7 +1256,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
     // and protects against concurrent loggers and concurrent writes
     // into mem_.
     // 添加到日志并应用到memtable。我们可以在此阶段释放锁，
-    // 因为&amp;w目前负责日志记录，并防止并发日志记录器和并发写入mem。
+    // 因为&w目前负责日志记录，并防止并发日志记录器和并发写入mem。
     {
       mutex_.Unlock();
       status = log_->AddRecord(WriteBatchInternal::Contents(write_batch));
@@ -1243,7 +1268,7 @@ Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
         }
       }
       if (status.ok()) {
-        status = WriteBatchInternal::InsertInto(write_batch, mem_);
+        status = WriteBatchInternal::InsertInto(write_batch, mem_); // 优先写入到mem_
       }
       mutex_.Lock();
       if (sync_error) {
@@ -1356,7 +1381,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       allow_delay = false;  // Do not delay a single write more than once
       mutex_.Lock();
     } else if (!force &&
-               (mem_->ApproximateMemoryUsage() <= options_.write_buffer_size)) {
+               (mem_->ApproximateMemoryUsage() <= options_.write_buffer_size)) { // mem_没有超过阈值不做处理
       // There is room in current memtable
       break;
     } else if (imm_ != nullptr) {
@@ -1368,7 +1393,7 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       // There are too many level-0 files.
       Log(options_.info_log, "Too many L0 files; waiting...\n");
       background_work_finished_signal_.Wait();
-    } else {
+    } else { // 达到阈值，尝试将mem_转换为imem_
       // Attempt to switch to a new memtable and trigger compaction of old
       // 尝试切换到新的memtable并触发旧memtable的压缩 // 说明日志文件达到了预定大小时(默认是4MB)
       assert(versions_->PrevLogNumber() == 0);
@@ -1399,16 +1424,17 @@ Status DBImpl::MakeRoomForWrite(bool force) {
         RecordBackgroundError(s);
       }
       delete logfile_;
-
+      
+      // mem_则转变为imm_，并新建一个新mem_
       logfile_ = lfile;
       logfile_number_ = new_log_number;
       log_ = new log::Writer(lfile);
       imm_ = mem_;
-      has_imm_.store(true, std::memory_order_release);
-      mem_ = new MemTable(internal_comparator_);
+      has_imm_.store(true, std::memory_order_release); // 内存屏蔽
+      mem_ = new MemTable(internal_comparator_); // 将mem_分配新的memtable 
       mem_->Ref();
       force = false;  // Do not force another compaction if have room
-      MaybeScheduleCompaction();
+      MaybeScheduleCompaction(); // 生成压缩计划，将imm_持久化到磁盘
     }
   }
   return s;

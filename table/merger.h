@@ -18,6 +18,9 @@ class Iterator;
 // key is present in K child iterators, it will be yielded K times.
 //
 // REQUIRES: n >= 0
+// 返回一个迭代器，该迭代器提供子元素[0,n-1]中数据的并集。获取子迭代器的所有权，并在删除结果迭代器时删除它们。
+// 结果没有重复抑制。也就是说，如果一个特定的键存在于K个子迭代器中，它将被产生K次。
+// 要求:n >= 0
 Iterator* NewMergingIterator(const Comparator* comparator, Iterator** children,
                              int n);
 

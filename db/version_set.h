@@ -376,7 +376,7 @@ class Compaction {
 
   int level_; // 需要压缩的level
   uint64_t max_output_file_size_; // 压缩之后最大的文件大小，等于options->max_file_size
-  Version* input_version_; // 当前需要操作的版本
+  Version* input_version_; // 当前需要操作的版本（即最新的版本）
   VersionEdit edit_; // 版本变化
 
   // Each compaction reads inputs from "level_" and "level_+1"

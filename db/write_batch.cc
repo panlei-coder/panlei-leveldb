@@ -51,7 +51,7 @@ void WriteBatch::Clear() {
 // 返回WriteBatch的大致大小
 size_t WriteBatch::ApproximateSize() const { return rep_.size(); }
 
-// Iterate函数主要来自InsertInto函数，主要是解析数据然后将其插入到memtable
+// Iterate()函数主要来自InsertInto函数，主要是解析数据然后将其插入到memtable
 Status WriteBatch::Iterate(Handler* handler) const {
   Slice input(rep_);
   if (input.size() < kHeader) { // 判断rep_是否小于kHeader

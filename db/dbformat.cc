@@ -64,7 +64,7 @@ int InternalKeyComparator::Compare(const Slice& akey, const Slice& bkey) const {
     const uint64_t bnum = DecodeFixed64(bkey.data() + bkey.size() - 8);
     if (anum > bnum) {
       r = -1;
-    } else if (anum < bnum) {
+    } else if (anum < bnum) {  // 序列号小的反而值大
       r = +1;
     }
   }

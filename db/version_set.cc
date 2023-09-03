@@ -1774,6 +1774,7 @@ FileMetaData* FindSmallestBoundaryFile(
 // 如果有两个块，b1=(l1, u1)和b2=(l2, u2)和user_key(u1) = user_key(l2)，
 // 如果我们压缩b1但不压缩b2，那么后续的get操作将产生一个错误的结果，因为它将返回第一级b2的记录，
 // 而不是b1的记录，因为它逐级搜索与提供的用户键匹配的记录。
+//（注：internalkey对于user_key相同时，按照sequence降序排列，sequence越大，排在前面，更容易被找到）
 // 参数:
 // 在level_files中:搜索边界文件的文件列表。
 // in/out compaction_files:通过添加边界文件扩展的文件列表。
@@ -1826,6 +1827,16 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // 增加level n级别文件的数量，并且扩大之后参与的文件总大小不能超过50MB
   // 看能否将level中与取出的level+1中的range重叠的也加到inputs中，
   // 而新加的文件的range都在已经加入的level+1的文件的范围中
+  /*
+  具体的逻辑如下：
+  1）inputs_[1]选取完毕之后，首先计算inputs_[0]和inputs_[1]所有文件的最大、最小值范围，然后通过该范围重新去level n层计算inputs_[0]，此时可以有可能会选取到新的文件
+  2）通过新的inputs_[0]的键范围重新选取inputs_[1]中的文件，如果inpust_[1]中的文件个数不变并且扩大范围后所有文件的总大小不超过50MB，则使用新的inputs_[0]进行本次的
+  compaction操作，否则继续使用原来的inputs_[0]。50MB的限制是为了防止执行一次compaction操作导致大量的I/O操作，从而影响系统性能。
+  3）如果扩大level n层的文件个数之后导致level n+1层的文件个数也进行了扩大，则不能进行此次优化。因为level 1到level 6的所有文件键范围是不能有重叠的，如果继续执行该优化，会导致compaction
+  之后level n+1层的文件有键重叠的情况。
+  @todo 为什么一定要保证level n+1层的文件个数保持不变，为什么不能使用level n+1层扩大之后的文件集合进行compact操作呢 ？？
+  画图进行了理论上的测试，似乎并不影响正确性，可能是为了简化操作还是有别的原因。
+  */
   if (!c->inputs_[1].empty()) { // levelDB优化逻辑，在不扩大level n+1层文件个数的情况下，将level n层的文件个数扩大
     std::vector<FileMetaData*> expanded0;
     current_->GetOverlappingInputs(level, &all_start, &all_limit, &expanded0);
@@ -1929,18 +1940,23 @@ Compaction::~Compaction() {
   }
 }
 
-// 返回true表示不需要合并，只要移动文件到上一层就好了
+// IsTrivialMove()函数返回true表示不需要合并，只要移动文件到上一层就好了
 bool Compaction::IsTrivialMove() const {
   const VersionSet* vset = input_version_->vset_;
   // Avoid a move if there is lots of overlapping grandparent data.
   // Otherwise, the move could create a parent file that will require
   // a very expensive merge later on.
-  return (num_input_files(0) == 1 && num_input_files(1) == 0 && // level 只有一个文件 | level + 1没有文件
+  // 1.level n层和level n+1层没有重叠
+  // 2.level n层和grandparents_重叠度小于阈值（避免后面到level n+1层时和level n+2层之间的重叠度太大）
+  // 3.level n层必须只有一个sst文件
+  return (num_input_files(0) == 1 && num_input_files(1) == 0 && // level 只有一个文件 且 level + 1没有文件
           TotalFileSize(grandparents_) <=
               MaxGrandParentOverlapBytes(vset->options_)); // 有重叠的爷爷辈文件大小之和小于阈值
 }
 
-// 将这个compact中的所有文件输入到edit中作为待删除的文件
+// AddInputDeletions()函数将所有需要删除SST文件添加到*edit。因为input经过变化生成output，
+// 因此input对应到deleted_file容器，output进入added_file容器。
+// 需要注意在前面在add的时候，先忽略掉deleted里面的，因为IsTrivialMove是直接移动文件，到处都是细节。
 void Compaction::AddInputDeletions(VersionEdit* edit) {
   for (int which = 0; which < 2; which++) {
     for (size_t i = 0; i < inputs_[which].size(); i++) {
@@ -1949,8 +1965,9 @@ void Compaction::AddInputDeletions(VersionEdit* edit) {
   }
 }
 
-// 检查在level + 2及更高的等级上,有没有找到user_key
-// 如果都没有找到，说明这个级别就是针对这个key的base level
+// IsBaseLevelForKey()函数检查在level + 2及更高的等级上,有没有找到user_key
+// 如果都没有找到，说明这个级别就是针对这个key的base level。
+// 主要是用于key的type=deletion时可不可以将该key删除掉。
 bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
   // Maybe use binary search to find right entry instead of linear search?
   const Comparator* user_cmp = input_version_->vset_->icmp_.user_comparator();
@@ -1972,7 +1989,8 @@ bool Compaction::IsBaseLevelForKey(const Slice& user_key) {
   return true;
 }
 
-// 判断这个key的加入会不会使得当前output的sstable和grantparents有太多的overlap
+// ShouldStopBefore()函数判断这个key的加入会不会使得当前output的sstable和grantparents有太多的overlap
+// 为了避免合并到level+1层之后和level+2层重叠太多，导致下次合并level+1时候时间太久，因此需要及时停止输出，并生成新的SST
 bool Compaction::ShouldStopBefore(const Slice& internal_key) {
   const VersionSet* vset = input_version_->vset_;
   // Scan to find earliest grandparent file that contains key.
@@ -1987,7 +2005,7 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
     }
     grandparent_index_++;
   }
-  // 第一次进来该函数就会置为true，第二次以后进来都为true了
+  // 第一次进来前为false，进来之后该函数就会置为true，第二次以后进来都为true了
   seen_key_ = true;
 
   if (overlapped_bytes_ > MaxGrandParentOverlapBytes(vset->options_)) {
@@ -2000,6 +2018,7 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
   }
 }
 
+// ReleaseInputs()函数用来释放内存
 void Compaction::ReleaseInputs() {
   if (input_version_ != nullptr) {
     input_version_->Unref();

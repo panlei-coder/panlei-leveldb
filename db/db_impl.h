@@ -179,9 +179,10 @@ class DBImpl : public DB {
   port::Mutex mutex_;
   std::atomic<bool> shutting_down_;
   port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);
-  MemTable* mem_;
-  MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted
-  std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_
+  // @todo  mem_是多线程访问，但是对于imm_是只有单线程进行压缩的（源代码中似乎是这样的）？？？
+  MemTable* mem_;  // 内存中的可变Table（skiplist），有mutex_进行保护的
+  MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted // 内存中的不可变Table ，多线程将imm_转换为SSTable，写入磁盘
+  std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_ 后台线程来检测是否有imm_
   WritableFile* logfile_;
   uint64_t logfile_number_ GUARDED_BY(mutex_);
   log::Writer* log_;
@@ -195,6 +196,7 @@ class DBImpl : public DB {
 
   // Set of table files to protect from deletion because they are
   // part of ongoing compactions.
+  // 要防止删除的一组表文件，因为它们是正在进行的压缩的一部分。
   std::set<uint64_t> pending_outputs_ GUARDED_BY(mutex_);
 
   // Has a background compaction been scheduled or is running?
