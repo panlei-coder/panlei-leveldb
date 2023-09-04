@@ -1386,7 +1386,10 @@ void VersionSet::MarkFileNumberUsed(uint64_t number) {
   }
 }
 
-// Finalize()函数用于计算这个新version的compact score和compact level，预计算下一个compact的最佳层（compaction_score_最大的层）
+/*
+Finalize()函数用于计算这个新version的compact score和compact level，
+预计算下一个compact的最佳层（compaction_score_最大的层）
+*/
 void VersionSet::Finalize(Version* v) {
   // Precomputed best level for next compaction
   int best_level = -1;
@@ -1638,18 +1641,18 @@ Iterator* VersionSet::MakeInputIterator(Compaction* c) {
 
 // PickCompaction()函数选择compact文件
 /*
-        优先判断第一种策略（size_compaction）Version中的变量compaction_level_决定此次compaction操作的层级，
+1、优先判断第一种策略（size_compaction）Version中的变量compaction_level_决定此次compaction操作的层级，
 然后通过VersionSet中的compact_pointer_决定此次level n层需要参与的文件，并且将文件写入inputs_[0]变量。
 每次执行完compaction操作后会在VersionSet中的compact_pointer_记录本次参与的最大键，
 便于下次Compaction操作时选取该最大键之后的文件。因此compact_pointer_相当于一个游标，据此可以遍历一个
 层级的键空间。如果没有该游标或者已经遍历完该层的键空间，则会选择level n中的第一个文件。
-         如果第一种策略不满足，则判断第二种策略（seek_compaction）。Version中的变量file_to_compact_level_
+2、如果第一种策略不满足，则判断第二种策略（seek_compaction）。Version中的变量file_to_compact_level_
 决定此次Compaction操作的层级，变量file_to_compact_就是level n层参与的文件。
-         注意，如果进行的是一个从level-0到level-1的Compaction操作，则level-0层文件的选取略有不同，由于level-0中
+注意，如果进行的是一个从level-0到level-1的Compaction操作，则level-0层文件的选取略有不同，由于level-0中
 不同文件的键范围有可能重叠，因此需要进行特殊选取。
-         （1）取出level-0中参与本次Compaction操作的文件的最小键和最大键，假设其范围为[Lkey,Hkey]。
-         （2）根据最小键和最大键对比level-0中的所有文件，如果存在文件与[Lkey,Hkey]有重叠，则扩大最小键和最大键范围，继续查找。
-         因为可能会因为某个SSTable文件被Compaction操作之后，导致其他的SSTable文件也包含某个相同的值被访问到，导致不一致的结果。
+（1）取出level-0中参与本次Compaction操作的文件的最小键和最大键，假设其范围为[Lkey,Hkey]。
+（2）根据最小键和最大键对比level-0中的所有文件，如果存在文件与[Lkey,Hkey]有重叠，则扩大最小键和最大键范围，继续查找。
+因为可能会因为某个SSTable文件被Compaction操作之后，导致其他的SSTable文件也包含某个相同的值被访问到，导致不一致的结果。
 */
 Compaction* VersionSet::PickCompaction() {
   Compaction* c;
@@ -1829,11 +1832,15 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // 而新加的文件的range都在已经加入的level+1的文件的范围中
   /*
   具体的逻辑如下：
-  1）inputs_[1]选取完毕之后，首先计算inputs_[0]和inputs_[1]所有文件的最大、最小值范围，然后通过该范围重新去level n层计算inputs_[0]，此时可以有可能会选取到新的文件
-  2）通过新的inputs_[0]的键范围重新选取inputs_[1]中的文件，如果inpust_[1]中的文件个数不变并且扩大范围后所有文件的总大小不超过50MB，则使用新的inputs_[0]进行本次的
-  compaction操作，否则继续使用原来的inputs_[0]。50MB的限制是为了防止执行一次compaction操作导致大量的I/O操作，从而影响系统性能。
-  3）如果扩大level n层的文件个数之后导致level n+1层的文件个数也进行了扩大，则不能进行此次优化。因为level 1到level 6的所有文件键范围是不能有重叠的，如果继续执行该优化，会导致compaction
-  之后level n+1层的文件有键重叠的情况。
+  1）inputs_[1]选取完毕之后，首先计算inputs_[0]和inputs_[1]所有文件的最大、最小值范围，
+    然后通过该范围重新去level n层计算inputs_[0]，此时可以有可能会选取到新的文件
+  2）通过新的inputs_[0]的键范围重新选取inputs_[1]中的文件，如果inpust_[1]中的文件个数不变，
+    并且扩大范围后所有文件的总大小不超过50MB，则使用新的inputs_[0]进行本次的
+    compaction操作，否则继续使用原来的inputs_[0]。50MB的限制是为了防止执行一次
+    compaction操作导致大量的I/O操作，从而影响系统性能。
+  3）如果扩大level n层的文件个数之后导致level n+1层的文件个数也进行了扩大，则不能进行此次优化。
+    因为level 1到level 6的所有文件键范围是不能有重叠的，如果继续执行该优化，会导致compaction
+    之后level n+1层的文件有键重叠的情况。
   @todo 为什么一定要保证level n+1层的文件个数保持不变，为什么不能使用level n+1层扩大之后的文件集合进行compact操作呢 ？？
   画图进行了理论上的测试，似乎并不影响正确性，可能是为了简化操作还是有别的原因。
   */
@@ -1871,6 +1878,10 @@ void VersionSet::SetupOtherInputs(Compaction* c) {
   // Compute the set of grandparent files that overlap this compaction
   // (parent == level+1; grandparent == level+2)
   // 需要计算压缩之后，与grandparents_重叠的文件
+  // 获取出level+2层与压缩后的level+1层(这里指的是level 与level+1合并压缩放入
+  // 到level+1中的文件，不包括level+1的所有)有重叠的文件放入到grandparents_,
+  // 作用就是当合并level+1与level+2时，根据grandparents_中的记录可进行提前结束，
+  // 不至于合并压力太大。（不是停止合并，后文的压缩是停止当前的SSTable压缩，新生成一个新的SSTable进行压缩）
   if (level + 2 < config::kNumLevels) {
     current_->GetOverlappingInputs(level + 2, &all_start, &all_limit,
                                    &c->grandparents_);
@@ -2018,7 +2029,7 @@ bool Compaction::ShouldStopBefore(const Slice& internal_key) {
   }
 }
 
-// ReleaseInputs()函数用来释放内存
+// ReleaseInputs()函数用来解引用compact过程中使用的version
 void Compaction::ReleaseInputs() {
   if (input_version_ != nullptr) {
     input_version_->Unref();

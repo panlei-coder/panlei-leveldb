@@ -28,8 +28,13 @@ namespace leveldb {
 SeqNum(8字节)|key键值对个数(4字节)|kTypeValue(1字节-kTypeValue)|key长度变长32位|key具体数据|value长度变长32位|value具体数据
 SeqNum(8字节)|key键值对个数(4字节)|kTypeValue(1字节-kTypeDeletion)|key长度变长32位|key具体数据
 
-需要说明的是WriteBatch的SeqNum是前一个SeqNum + 1得到的，这样的目的是整个Batch是一个整体积，所以公用一个SeqNum。
-但是MemTable中会保证一个键值对对应一个SeqNum
+1、需要说明的是WriteBatch的SeqNum是前一个SeqNum + 1得到的，
+sequence是整个WriteBatch写入时当前的SequenceNumber，按顺序逐个赋予record，
+比如第一个record的SequenceNumber是sequence，第二个是sequence + 1，以此类推；
+2、count是record的数量，MemTable中会保证一个键值对对应一个SeqNum;
+3、最后是一个record数组，record数组有两种类型：
+一种是代表写入的Kv，用1 byte的kTypeValue开头，后面跟上两个varstring分别表示键和值；
+一种代表删除操作，只需要指定键，用1 byte的kTypeDeletion后跟一个varstring。
 
 */
 

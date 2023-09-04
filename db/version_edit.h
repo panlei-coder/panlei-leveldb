@@ -33,6 +33,9 @@ struct FileMetaData {
 // VersionEdit类保存的是一个版本变动的信息，在某个基准版本上面，应用一个或者多个
 // VersionEdit就可以得到新的版本。VersionEdit中存放了基于上一个版本增加的文件信息，
 // 删除的文件信息。
+/* 
+Manifest文件可以看作是VersionEdit的日志，为了快速恢复需要将这些变更持久化到磁盘上。
+*/
 class VersionEdit {
  public:
   VersionEdit() { Clear(); }

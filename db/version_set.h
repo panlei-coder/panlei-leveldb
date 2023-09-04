@@ -169,7 +169,7 @@ class Version {
   // Level that should be compacted next and its compaction score.
   // Score < 1 means compaction is not strictly needed.  These fields
   // are initialized by Finalize().
-  // 下一步应压实的级别及其压实评分。Score < 1表示不需要严格压缩。这些字段由Finalize()初始化。
+  // 下一步应compact的级别及其compaction_score_。Score < 1表示不需要严格压缩。这些字段由Finalize()初始化。
   double compaction_score_; // 用于检查size超过阈值之后需要压缩的文件
   int compaction_level_; // 用于检查size超过阈值之后需要压缩的文件所在level
 };
@@ -311,8 +311,8 @@ class VersionSet {
   uint64_t next_file_number_; // 下一个文件编号
   uint64_t manifest_file_number_; // manifest文件编号
   uint64_t last_sequence_; // 最新的序列号
-  uint64_t log_number_; // 记录的当前日志编号
-  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted（0或被压缩的memtable的后备存储）前一个日志文件编号
+  uint64_t log_number_; // 记录的当前日志编号（mem_的日志文件）
+  uint64_t prev_log_number_;  // 0 or backing store for memtable being compacted（0或者是被压缩的memtable的后备存储）前一个日志文件编号（imm_的日志文件）
 
   // Opened lazily
   WritableFile* descriptor_file_; // 用于写manifest文件
@@ -385,7 +385,7 @@ class Compaction {
   // State used to check for number of overlapping grandparent files
   // (parent == level_ + 1, grandparent == level_ + 2)
   std::vector<FileMetaData*> grandparents_; // grandparent元数据
-  size_t grandparent_index_;  // Index in grandparent_starts_ // grandparent下表索引
+  size_t grandparent_index_;  // Index in grandparent_starts_ grandparents_数组的下标
   bool seen_key_;             // Some output key has been seen
   int64_t overlapped_bytes_;  // Bytes of overlap between current output // 当前压缩的文件与grandparent files重叠的字节数
                               // and grandparent files

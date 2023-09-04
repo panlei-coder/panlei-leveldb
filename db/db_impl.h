@@ -82,10 +82,11 @@ class DBImpl : public DB {
   struct Writer;
 
   // Information for a manual compaction
+  // 存放手动compact的信息
   struct ManualCompaction {
     int level;
     bool done;
-    const InternalKey* begin;  // null means beginning of key range
+    const InternalKey* begin;  // null means beginning of key range 
     const InternalKey* end;    // null means end of key range
     InternalKey tmp_storage;   // Used to keep track of compaction progress
   };
@@ -162,37 +163,37 @@ class DBImpl : public DB {
 
   // Constant after construction
   Env* const env_;
-  const InternalKeyComparator internal_comparator_;
-  const InternalFilterPolicy internal_filter_policy_;
+  const InternalKeyComparator internal_comparator_; // interal_key的比较器
+  const InternalFilterPolicy internal_filter_policy_; // 布隆过滤器
   const Options options_;  // options_.comparator == &internal_comparator_
-  const bool owns_info_log_;
-  const bool owns_cache_;
-  const std::string dbname_;
+  const bool owns_info_log_; // 是否拥有日志文件
+  const bool owns_cache_; // 是否拥有cache缓存
+  const std::string dbname_; // DB名称
 
   // table_cache_ provides its own synchronization
-  TableCache* const table_cache_;
+  TableCache* const table_cache_; // 用来存放SSTable的缓存（Block_Cache才是具体缓存DataBlock的，TableCache只是存放基本的元信息等）
 
   // Lock over the persistent DB state.  Non-null iff successfully acquired.
-  FileLock* db_lock_;
+  FileLock* db_lock_; // 锁定持久DB状态。成功获取非空iff。
 
   // State below is protected by mutex_
-  port::Mutex mutex_;
-  std::atomic<bool> shutting_down_;
+  port::Mutex mutex_; // 互斥锁
+  std::atomic<bool> shutting_down_; // DB是否关闭
   port::CondVar background_work_finished_signal_ GUARDED_BY(mutex_);
   // @todo  mem_是多线程访问，但是对于imm_是只有单线程进行压缩的（源代码中似乎是这样的）？？？
   MemTable* mem_;  // 内存中的可变Table（skiplist），有mutex_进行保护的
   MemTable* imm_ GUARDED_BY(mutex_);  // Memtable being compacted // 内存中的不可变Table ，多线程将imm_转换为SSTable，写入磁盘
   std::atomic<bool> has_imm_;         // So bg thread can detect non-null imm_ 后台线程来检测是否有imm_
-  WritableFile* logfile_;
-  uint64_t logfile_number_ GUARDED_BY(mutex_);
-  log::Writer* log_;
-  uint32_t seed_ GUARDED_BY(mutex_);  // For sampling.
+  WritableFile* logfile_;  // 写到缓存中，后续要通过log_刷到磁盘
+  uint64_t logfile_number_ GUARDED_BY(mutex_); // 日志文件序列号
+  log::Writer* log_; // 日志文件句柄
+  uint32_t seed_ GUARDED_BY(mutex_);  // For sampling. 随机种子
 
   // Queue of writers.
-  std::deque<Writer*> writers_ GUARDED_BY(mutex_);
-  WriteBatch* tmp_batch_ GUARDED_BY(mutex_);
+  std::deque<Writer*> writers_ GUARDED_BY(mutex_); // 一个写队列
+  WriteBatch* tmp_batch_ GUARDED_BY(mutex_); // 用来暂时存放进行批处理操作的变量（例如将多个WriteBatch合并成一个WriteBatch，都是使用的这个变量）
 
-  SnapshotList snapshots_ GUARDED_BY(mutex_);
+  SnapshotList snapshots_ GUARDED_BY(mutex_); // 快照链表
 
   // Set of table files to protect from deletion because they are
   // part of ongoing compactions.
@@ -200,20 +201,25 @@ class DBImpl : public DB {
   std::set<uint64_t> pending_outputs_ GUARDED_BY(mutex_);
 
   // Has a background compaction been scheduled or is running?
+  // 是否计划或者正在进行后台压缩
   bool background_compaction_scheduled_ GUARDED_BY(mutex_);
 
+  // 手动压缩
   ManualCompaction* manual_compaction_ GUARDED_BY(mutex_);
 
+  // Version集合
   VersionSet* const versions_ GUARDED_BY(mutex_);
 
   // Have we encountered a background error in paranoid mode?
-  Status bg_error_ GUARDED_BY(mutex_);
+  Status bg_error_ GUARDED_BY(mutex_); // 记录后台运行的错误信息
 
+  // 压缩的状态信息
   CompactionStats stats_[config::kNumLevels] GUARDED_BY(mutex_);
 };
 
 // Sanitize db options.  The caller should delete result.info_log if
 // it is not equal to src.info_log.
+// 清理db选项。如果result.info日志不等于src.info日志，调用者应该删除它。
 Options SanitizeOptions(const std::string& db,
                         const InternalKeyComparator* icmp,
                         const InternalFilterPolicy* ipolicy,

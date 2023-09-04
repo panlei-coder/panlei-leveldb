@@ -19,7 +19,7 @@ namespace leveldb {
 //     MutexLock l(&mu_);       // mu_ is an instance variable
 //     ... some complex code, possibly with multiple return paths ...
 //   }
-//  Helper类，它在构造时锁定互斥锁，并在调用MutexLock对象的析构函数时解锁互斥锁。
+//  Helper类，它在构造时锁定互斥锁，并在调用MutexLock对象的析构函数时解锁互斥锁，一般离开作用域会自动实现解锁操作。
 
 class SCOPED_LOCKABLE MutexLock {
  public:
