@@ -915,7 +915,7 @@ PosixEnv::PosixEnv()
       mmap_limiter_(MaxMmaps()),
       fd_limiter_(MaxOpenFiles()) {}
 
-// 创建后台线程
+// 创建后台线程（线程池，适用于任务频繁且有工作时间短、要求响应时间快、线程本身的开销与工作任务的开销不可忽略的场景）
 void PosixEnv::Schedule(
     void (*background_work_function)(void* background_work_arg),
     void* background_work_arg) {
